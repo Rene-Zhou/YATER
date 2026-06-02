@@ -1,0 +1,11 @@
+.agents/*
+.claude/*
+
+skills-lock.json
+
+# Test fixtures (large binary files)
+test-fixtures/
+
+# Rust
+/target
+**/*.rs.bk
