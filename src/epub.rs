@@ -339,12 +339,44 @@ fn has_annotation_ancestor(node: roxmltree::Node<'_, '_>) -> bool {
 }
 
 fn node_text(node: roxmltree::Node<'_, '_>) -> String {
+    let mut blocks = Vec::new();
+    append_annotation_text_blocks(node, &mut blocks);
+
+    if !blocks.is_empty() {
+        return blocks.join("\n");
+    }
+
+    normalized_descendant_text(node)
+}
+
+fn append_annotation_text_blocks(node: roxmltree::Node<'_, '_>, blocks: &mut Vec<String>) {
+    for child in node.children().filter(|child| child.is_element()) {
+        if is_text_block_element(child.tag_name().name()) {
+            let mut nested_blocks = Vec::new();
+            append_annotation_text_blocks(child, &mut nested_blocks);
+
+            if nested_blocks.is_empty() {
+                let text = normalized_descendant_text(child);
+                if !text.is_empty() {
+                    blocks.push(text);
+                }
+            } else {
+                blocks.extend(nested_blocks);
+            }
+        } else {
+            append_annotation_text_blocks(child, blocks);
+        }
+    }
+}
+
+fn normalized_descendant_text(node: roxmltree::Node<'_, '_>) -> String {
     node.descendants()
         .filter(|descendant| descendant.is_text())
         .filter_map(|descendant| descendant.text())
         .collect::<String>()
-        .trim()
-        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn blocks_from_xhtml_element(
@@ -596,6 +628,32 @@ mod tests {
             }]
         );
         assert_eq!(document.annotation_text("note-1"), Some("Footnote text."));
+    }
+
+    #[test]
+    fn preserves_block_breaks_in_annotation_plain_text() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Text with <a href="#note-1">[1]</a>.</p>
+    <aside id="note-1">
+      <p>First note paragraph.</p>
+      <p>Second note paragraph.</p>
+    </aside>
+  </body>
+</html>"##,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.annotation_text("note-1"),
+            Some("First note paragraph.\nSecond note paragraph.")
+        );
     }
 
     #[test]
