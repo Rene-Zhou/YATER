@@ -442,11 +442,26 @@ fn zip_parent(path: &str) -> String {
 }
 
 fn join_zip_path(base: &str, href: &str) -> String {
-    if base.is_empty() {
+    let joined = if base.is_empty() {
         href.to_string()
     } else {
         format!("{base}/{href}")
+    };
+    normalize_zip_path(&joined)
+}
+
+fn normalize_zip_path(path: &str) -> String {
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
     }
+    parts.join("/")
 }
 
 #[cfg(test)]
@@ -562,6 +577,43 @@ mod tests {
         assert!(matches!(
             &document.blocks[2],
             Block::Text(block) if block.text == "after."
+        ));
+    }
+
+    #[test]
+    fn normalizes_relative_image_paths_before_loading_data() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "Text/chapter1.xhtml",
+                r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p><img src="../images/picture.png" alt="Picture"/></p>
+  </body>
+</html>"#,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="Text/chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            Some(("OEBPS/images/picture.png", &[1, 2, 3])),
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert!(matches!(
+            &document.blocks[0],
+            Block::Image(block)
+                if block.source_path.as_deref() == Some("OEBPS/images/picture.png")
+                    && block.data.as_deref() == Some(&[1, 2, 3][..])
         ));
     }
 
