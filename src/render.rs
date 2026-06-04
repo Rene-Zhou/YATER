@@ -77,13 +77,19 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
             let label = image.alt_text.as_deref().unwrap_or("untitled");
             match app.image_mode() {
                 SelectedImageMode::Off => vec![Line::from(format!("[image disabled: {label}]"))],
+                SelectedImageMode::Sixel if image.data.is_none() && image.source_path.is_some() => {
+                    vec![Line::from(format!("[image unavailable: {label}]"))]
+                }
                 SelectedImageMode::Sixel => vec![Line::from(format!("[image: {label}]"))],
                 SelectedImageMode::Halfblock => {
-                    image
-                        .data
-                        .as_deref()
-                        .and_then(|data| render_halfblock_image(data, content.width, content.height))
-                        .unwrap_or_else(|| vec![Line::from(format!("[image: {label}]"))])
+                    match image.data.as_deref() {
+                        Some(data) => render_halfblock_image(data, content.width, content.height)
+                            .unwrap_or_else(|| vec![Line::from(format!("[image unavailable: {label}]"))]),
+                        None if image.source_path.is_some() => {
+                            vec![Line::from(format!("[image unavailable: {label}]"))]
+                        }
+                        None => vec![Line::from(format!("[image: {label}]"))],
+                    }
                 }
             }
         }
@@ -568,6 +574,29 @@ mod tests {
 
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("[image: Map of routes]"));
+    }
+
+    #[test]
+    fn renders_unavailable_placeholder_when_image_data_is_missing() {
+        let document = Document {
+            blocks: vec![Block::Image(ImageBlock {
+                alt_text: Some("Map of routes".to_string()),
+                source_path: Some("OEBPS/images/missing.png".to_string()),
+                data: None,
+                chapter_index: 0,
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::new(document);
+        let backend = TestBackend::new(50, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("[image unavailable: Map of routes]"));
     }
 
     #[test]
