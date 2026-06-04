@@ -49,7 +49,11 @@ pub fn open_with_issue_logger(
         let chapter_xml = read_zip_text(&mut archive, &chapter_path)?;
         let start_block = blocks.len();
         let chapter_base = zip_parent(&chapter_path);
-        let parsed_chapter = match parse_xhtml_chapter(&chapter_xml, chapter_index, &chapter_base) {
+        let mut parsed_chapter = match parse_xhtml_chapter(
+            &chapter_xml,
+            chapter_index,
+            &chapter_base,
+        ) {
             Ok(chapter) => chapter,
             Err(error) => {
                 log_issue(&format!("malformed HTML: {chapter_path}: {error}"));
@@ -63,6 +67,7 @@ pub fn open_with_issue_logger(
                 }
             }
         };
+        load_image_data(&mut archive, &mut parsed_chapter.blocks, &mut log_issue);
 
         target_blocks_by_href.insert(chapter_path.clone(), start_block);
         blocks.extend(parsed_chapter.blocks);
@@ -123,6 +128,36 @@ fn read_zip_text(archive: &mut zip::ZipArchive<File>, name: &str) -> Result<Stri
     file.read_to_string(&mut contents)
         .map_err(|error| EpubError(error.to_string()))?;
     Ok(contents)
+}
+
+fn read_zip_bytes(archive: &mut zip::ZipArchive<File>, name: &str) -> Result<Vec<u8>, EpubError> {
+    let mut file = archive
+        .by_name(name)
+        .map_err(|error| EpubError(format!("failed to read {name}: {error}")))?;
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)
+        .map_err(|error| EpubError(error.to_string()))?;
+    Ok(contents)
+}
+
+fn load_image_data(
+    archive: &mut zip::ZipArchive<File>,
+    blocks: &mut [Block],
+    log_issue: &mut impl FnMut(&str),
+) {
+    for block in blocks {
+        let Block::Image(image) = block else {
+            continue;
+        };
+        let Some(source_path) = image.source_path.clone() else {
+            continue;
+        };
+
+        match read_zip_bytes(archive, &source_path) {
+            Ok(data) => image.data = Some(data),
+            Err(error) => log_issue(&format!("bad image: {source_path}: {error}")),
+        }
+    }
 }
 
 fn find_opf_path(container_xml: &str) -> Result<String, EpubError> {
@@ -321,6 +356,7 @@ fn append_visible_blocks(
                     source_path: child
                         .attribute("src")
                         .map(|source_path| join_zip_path(chapter_base, source_path)),
+                    data: None,
                     chapter_index,
                 }));
                 continue;
@@ -497,6 +533,7 @@ mod tests {
             Block::Image(block)
                 if block.alt_text.as_deref() == Some("Picture")
                     && block.source_path.as_deref() == Some("OEBPS/images/picture.png")
+                    && block.data.as_deref() == Some(&[1, 2, 3][..])
         ));
         assert!(matches!(
             &document.blocks[2],
@@ -532,7 +569,50 @@ mod tests {
         assert!(issues[0].contains("malformed HTML: OEBPS/chapter1.xhtml"));
     }
 
+    #[test]
+    fn missing_image_data_is_logged_non_fatally() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub_without_image_file(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p><img src="images/missing.png" alt="Missing"/></p>
+  </body>
+</html>"#,
+        );
+        let mut issues = Vec::new();
+
+        let document = super::open_with_issue_logger(&epub_path, |issue| {
+            issues.push(issue.to_string());
+        })
+        .expect("parse EPUB");
+
+        assert!(matches!(
+            &document.blocks[0],
+            Block::Image(block)
+                if block.alt_text.as_deref() == Some("Missing")
+                    && block.source_path.as_deref() == Some("OEBPS/images/missing.png")
+                    && block.data.is_none()
+        ));
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("bad image: OEBPS/images/missing.png"));
+    }
+
     fn write_minimal_epub(path: &Path, chapter_xhtml: &str) {
+        write_epub(
+            path,
+            chapter_xhtml,
+            Some(("OEBPS/images/picture.png", &[1, 2, 3])),
+        );
+    }
+
+    fn write_minimal_epub_without_image_file(path: &Path, chapter_xhtml: &str) {
+        write_epub(path, chapter_xhtml, None);
+    }
+
+    fn write_epub(path: &Path, chapter_xhtml: &str, image_file: Option<(&str, &[u8])>) {
         let file = File::create(path).expect("create epub");
         let mut writer = ZipWriter::new(file);
         let options = SimpleFileOptions::default();
@@ -588,6 +668,9 @@ mod tests {
             "OEBPS/chapter1.xhtml",
             chapter_xhtml,
         );
+        if let Some((name, contents)) = image_file {
+            write_zip_bytes(&mut writer, options, name, contents);
+        }
 
         writer.finish().expect("finish epub");
     }
@@ -602,5 +685,15 @@ mod tests {
         writer
             .write_all(contents.as_bytes())
             .expect("write zip file");
+    }
+
+    fn write_zip_bytes(
+        writer: &mut ZipWriter<File>,
+        options: SimpleFileOptions,
+        name: &str,
+        contents: &[u8],
+    ) {
+        writer.start_file(name, options).expect("start zip file");
+        writer.write_all(contents).expect("write zip file");
     }
 }

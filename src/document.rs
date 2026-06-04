@@ -19,6 +19,7 @@ pub struct TextBlock {
 pub struct ImageBlock {
     pub alt_text: Option<String>,
     pub source_path: Option<String>,
+    pub data: Option<Vec<u8>>,
     pub chapter_index: usize,
 }
 
