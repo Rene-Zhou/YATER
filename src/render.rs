@@ -7,7 +7,7 @@ use crate::sentence::segment_sentences;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph, Wrap};
 use ratatui_image::{Image as TerminalImage, Resize};
 
 pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
@@ -30,7 +30,10 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     frame.render_widget(Paragraph::new(chapter_title).centered(), top_bar);
 
     if !draw_current_image(frame, content, app) {
-        frame.render_widget(Paragraph::new(current_content_lines(app, content)), content);
+        frame.render_widget(
+            Paragraph::new(current_content_lines(app, content)).wrap(Wrap { trim: false }),
+            content,
+        );
     }
 
     if app.focus() == Focus::Toc {
@@ -283,9 +286,15 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, content: Rect, app: &
         3.min(content.height)
     };
     let width = content.width.min(50);
+    let y = if is_immersed {
+        content.y
+    } else {
+        let sentence_row = current_sentence_screen_row(app, content.width).unwrap_or(0);
+        content.y + sentence_row.saturating_sub(height)
+    };
     let area = Rect {
         x: content.x,
-        y: content.y,
+        y,
         width,
         height,
     };
@@ -300,6 +309,36 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, content: Rect, app: &
         Paragraph::new(annotation_text).block(WidgetBlock::default().borders(Borders::ALL)),
         area,
     );
+}
+
+fn current_sentence_screen_row(app: &App, width: u16) -> Option<u16> {
+    let position = app.position();
+    let block = app.document().text_block(position.block_index)?;
+    let prefix = block.text.get(..position.sentence_offset)?;
+
+    Some(wrapped_row_for_prefix(prefix, width))
+}
+
+fn wrapped_row_for_prefix(prefix: &str, width: u16) -> u16 {
+    let width = usize::from(width.max(1));
+    let mut row = 0;
+    let mut column = 0;
+
+    for character in prefix.chars() {
+        if character == '\n' {
+            row += 1;
+            column = 0;
+            continue;
+        }
+
+        column += 1;
+        if column >= width {
+            row += 1;
+            column = 0;
+        }
+    }
+
+    row
 }
 
 struct VisibleAnnotation {
@@ -559,6 +598,51 @@ mod tests {
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("┌"));
         assert!(rendered.contains("┘"));
+    }
+
+    #[test]
+    fn annotation_overlay_bottom_edge_sits_above_current_sentence() {
+        let mut annotations = HashMap::new();
+        annotations.insert("note-1".to_string(), "Footnote text.".to_string());
+        let prefix = concat!(
+            "aaaa bbbb cccc dddd. ",
+            "eeee ffff gggg hhhh. ",
+            "iiii jjjj kkkk llll. ",
+            "mmmm nnnn oooo pppp.",
+        );
+        let document = Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: format!("{prefix} Target [1]."),
+                chapter_index: 0,
+                annotations: vec![AnnotationRef {
+                    id: "note-1".to_string(),
+                    offset: prefix.len() + " Target ".len(),
+                }],
+            })],
+            toc: Vec::new(),
+            annotations,
+            chapter_ranges: Vec::new(),
+        };
+        let mut app = App::with_position(
+            document,
+            ReadingPosition {
+                block_index: 0,
+                sentence_offset: prefix.len(),
+            },
+        );
+        app.apply(Action::OpenAnnotationOverlay);
+        let backend = TestBackend::new(20, 9);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let highlighted_row = row_index_with_modifier(buffer, Modifier::REVERSED)
+            .expect("highlighted sentence row");
+        let overlay_bottom_row = row_index_containing_text(buffer, "└")
+            .expect("overlay bottom border row");
+
+        assert_eq!(overlay_bottom_row + 1, highlighted_row);
     }
 
     #[test]
@@ -836,6 +920,28 @@ mod tests {
             .any(|row| {
                 let row_text = row.iter().map(|cell| cell.symbol()).collect::<String>();
                 row_text.contains(text) && row.iter().any(|cell| cell.modifier.contains(modifier))
+            })
+    }
+
+    fn row_index_with_modifier(
+        buffer: &ratatui::buffer::Buffer,
+        modifier: Modifier,
+    ) -> Option<usize> {
+        buffer
+            .content()
+            .chunks(buffer.area.width as usize)
+            .position(|row| row.iter().any(|cell| cell.modifier.contains(modifier)))
+    }
+
+    fn row_index_containing_text(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<usize> {
+        buffer
+            .content()
+            .chunks(buffer.area.width as usize)
+            .position(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .contains(text)
             })
     }
 
