@@ -198,7 +198,7 @@ impl App {
                 self.focus = Focus::Content;
                 self.annotation_scroll = 0;
             }
-            Action::ScrollAnnotationDown => self.annotation_scroll += 1,
+            Action::ScrollAnnotationDown => self.scroll_annotation_down(),
             Action::ScrollAnnotationUp => {
                 self.annotation_scroll = self.annotation_scroll.saturating_sub(1);
             }
@@ -426,6 +426,33 @@ impl App {
                 (self.selected_annotation_index + 1) % annotation_count;
             self.annotation_scroll = 0;
         }
+    }
+
+    fn scroll_annotation_down(&mut self) {
+        let max_scroll = self.current_annotation_line_count().saturating_sub(1);
+        self.annotation_scroll = (self.annotation_scroll + 1).min(max_scroll);
+    }
+
+    fn current_annotation_line_count(&self) -> usize {
+        self.current_annotation_text()
+            .map(|text| text.lines().count().max(1))
+            .unwrap_or(0)
+    }
+
+    fn current_annotation_text(&self) -> Option<&str> {
+        let block = self.document.text_block(self.position.block_index)?;
+        let sentence_range = segment_sentences(&block.text)
+            .into_iter()
+            .find(|range| range.0 == self.position.sentence_offset)?;
+        let annotation_ref = block
+            .annotations
+            .iter()
+            .filter(|annotation_ref| {
+                sentence_range.0 <= annotation_ref.offset && annotation_ref.offset < sentence_range.1
+            })
+            .nth(self.selected_annotation_index)?;
+
+        self.document.annotation_text(&annotation_ref.id)
     }
 
     fn current_sentence_annotation_count(&self) -> usize {
@@ -1050,6 +1077,9 @@ mod tests {
         app.apply(Action::OpenAnnotationOverlay);
         app.apply(Action::ImmerseAnnotation);
         app.apply(Action::ScrollAnnotationDown);
+        app.apply(Action::ScrollAnnotationDown);
+        assert_eq!(app.annotation_scroll(), 2);
+
         app.apply(Action::ScrollAnnotationDown);
         assert_eq!(app.annotation_scroll(), 2);
 
