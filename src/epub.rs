@@ -444,7 +444,7 @@ fn append_visible_blocks(
                 continue;
             }
 
-            if let Some(id) = child.attribute("href").and_then(|href| href.strip_prefix('#')) {
+            if let Some(id) = child.attribute("href").and_then(annotation_id_from_href) {
                 annotation_refs.push(AnnotationRef {
                     id: id.to_string(),
                     offset: text.len(),
@@ -460,6 +460,15 @@ fn append_visible_blocks(
                 annotation_refs,
             );
         }
+    }
+}
+
+fn annotation_id_from_href(href: &str) -> Option<&str> {
+    let (_, id) = href.rsplit_once('#')?;
+    if id.is_empty() {
+        None
+    } else {
+        Some(id)
     }
 }
 
@@ -618,6 +627,35 @@ mod tests {
 <html xmlns="http://www.w3.org/1999/xhtml">
   <body>
     <p>Text with <a href="#note-1">[1]</a>.</p>
+    <aside id="note-1"><p>Footnote text.</p></aside>
+  </body>
+</html>"##,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let block = document.text_block(0).expect("first text block");
+
+        assert_eq!(block.text, "Text with [1].");
+        assert_eq!(
+            block.annotations,
+            vec![AnnotationRef {
+                id: "note-1".to_string(),
+                offset: "Text with ".len(),
+            }]
+        );
+        assert_eq!(document.annotation_text("note-1"), Some("Footnote text."));
+    }
+
+    #[test]
+    fn extracts_file_fragment_annotation_refs() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Text with <a href="chapter1.xhtml#note-1">[1]</a>.</p>
     <aside id="note-1"><p>Footnote text.</p></aside>
   </body>
 </html>"##,
