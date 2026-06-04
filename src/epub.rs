@@ -231,20 +231,7 @@ fn parse_xhtml_chapter(
         }
     }
 
-    for node in document
-        .descendants()
-        .filter(|node| {
-            node.is_element()
-                && is_text_block_element(node.tag_name().name())
-                && !has_annotation_ancestor(*node)
-        })
-    {
-        blocks.extend(blocks_from_xhtml_element(
-            node,
-            chapter_index,
-            chapter_base,
-        ));
-    }
+    append_chapter_blocks(document.root_element(), chapter_index, chapter_base, &mut blocks);
 
     Ok(ParsedChapter {
         blocks,
@@ -318,6 +305,29 @@ fn is_text_block_element(name: &str) -> bool {
     )
 }
 
+fn append_chapter_blocks(
+    node: roxmltree::Node<'_, '_>,
+    chapter_index: usize,
+    chapter_base: &str,
+    blocks: &mut Vec<Block>,
+) {
+    for child in node.children().filter(|child| child.is_element()) {
+        if is_annotation_container(child) || has_annotation_ancestor(child) {
+            continue;
+        }
+
+        if is_text_block_element(child.tag_name().name()) {
+            blocks.extend(blocks_from_xhtml_element(
+                child,
+                chapter_index,
+                chapter_base,
+            ));
+        } else {
+            append_chapter_blocks(child, chapter_index, chapter_base, blocks);
+        }
+    }
+}
+
 fn is_annotation_container(node: roxmltree::Node<'_, '_>) -> bool {
     matches!(node.tag_name().name(), "aside" | "note") && node.attribute("id").is_some()
 }
@@ -373,6 +383,16 @@ fn append_visible_blocks(
                 text.push_str(child_text);
             }
         } else if child.is_element() {
+            if is_text_block_element(child.tag_name().name()) {
+                flush_text_block(blocks, chapter_index, text, annotation_refs);
+                blocks.extend(blocks_from_xhtml_element(
+                    child,
+                    chapter_index,
+                    chapter_base,
+                ));
+                continue;
+            }
+
             if child.tag_name().name() == "img" {
                 flush_text_block(blocks, chapter_index, text, annotation_refs);
                 blocks.push(Block::Image(ImageBlock {
@@ -514,6 +534,38 @@ mod tests {
                 start_block: 0,
                 end_block: 2,
             })
+        );
+    }
+
+    #[test]
+    fn parses_nested_block_elements_without_duplicate_text() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <div>
+      <p>First nested paragraph.</p>
+      <p>Second nested paragraph.</p>
+    </div>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document
+                .blocks
+                .iter()
+                .filter_map(|block| match block {
+                    Block::Text(block) => Some(block.text.as_str()),
+                    Block::Image(_) => None,
+                })
+                .collect::<Vec<_>>(),
+            vec!["First nested paragraph.", "Second nested paragraph."]
         );
     }
 
