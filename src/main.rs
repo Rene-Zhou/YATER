@@ -6,6 +6,7 @@ use ratatui::Terminal;
 use yater::cli::parse_from;
 use yater::epub;
 use yater::image::{select_image_mode, ImageModeSupport};
+use yater::issue_log::IssueLog;
 use yater::progress::ProgressStore;
 use yater::runtime::{
     build_app_with_image_mode, run_terminal_event_loop_with_progress, CrosstermEventSource,
@@ -35,10 +36,18 @@ fn main() {
     }
 
     let image_mode = select_image_mode(cli.image_mode, ImageModeSupport::terminal_default());
+    let issue_log = IssueLog::from_env();
     let mut app = match build_app_with_image_mode(
         &cli.file,
         image_mode,
-        |path| epub::open(path).map_err(|error| RuntimeError::new(error.to_string())),
+        |path| {
+            epub::open_with_issue_logger(path, |issue| {
+                if let Some(log) = &issue_log {
+                    let _ = log.append(current_timestamp(), issue);
+                }
+            })
+            .map_err(|error| RuntimeError::new(error.to_string()))
+        },
         |path| {
             ProgressStore::from_env()
                 .map(|store| {

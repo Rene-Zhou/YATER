@@ -19,6 +19,13 @@ impl std::fmt::Display for EpubError {
 impl std::error::Error for EpubError {}
 
 pub fn open(path: &Path) -> Result<Document, EpubError> {
+    open_with_issue_logger(path, |_| {})
+}
+
+pub fn open_with_issue_logger(
+    path: &Path,
+    mut log_issue: impl FnMut(&str),
+) -> Result<Document, EpubError> {
     let file = File::open(path).map_err(|error| EpubError(error.to_string()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|error| EpubError(error.to_string()))?;
 
@@ -41,7 +48,20 @@ pub fn open(path: &Path) -> Result<Document, EpubError> {
         let chapter_path = join_zip_path(&opf_base, &item.href);
         let chapter_xml = read_zip_text(&mut archive, &chapter_path)?;
         let start_block = blocks.len();
-        let parsed_chapter = parse_xhtml_chapter(&chapter_xml, chapter_index)?;
+        let parsed_chapter = match parse_xhtml_chapter(&chapter_xml, chapter_index) {
+            Ok(chapter) => chapter,
+            Err(error) => {
+                log_issue(&format!("malformed HTML: {chapter_path}: {error}"));
+                ParsedChapter {
+                    blocks: vec![Block::Text(TextBlock {
+                        text: format!("[malformed chapter: {chapter_path}]"),
+                        chapter_index,
+                        annotations: Vec::new(),
+                    })],
+                    annotations: AnnotationStore::new(),
+                }
+            }
+        };
 
         target_blocks_by_href.insert(chapter_path.clone(), start_block);
         blocks.extend(parsed_chapter.blocks);
@@ -455,6 +475,34 @@ mod tests {
             &document.blocks[2],
             Block::Text(block) if block.text == "after."
         ));
+    }
+
+    #[test]
+    fn malformed_chapter_is_logged_and_replaced_with_placeholder() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Broken chapter.
+  </body>
+</html>"#,
+        );
+        let mut issues = Vec::new();
+
+        let document = super::open_with_issue_logger(&epub_path, |issue| {
+            issues.push(issue.to_string());
+        })
+        .expect("parse EPUB with placeholder");
+
+        assert!(matches!(
+            &document.blocks[0],
+            Block::Text(block) if block.text == "[malformed chapter: OEBPS/chapter1.xhtml]"
+        ));
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("malformed HTML: OEBPS/chapter1.xhtml"));
     }
 
     fn write_minimal_epub(path: &Path, chapter_xhtml: &str) {
