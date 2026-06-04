@@ -416,6 +416,7 @@ mod tests {
         let document = Document {
             blocks: vec![Block::Image(ImageBlock {
                 alt_text: Some("Map of routes".to_string()),
+                source_path: None,
                 chapter_index: 0,
             })],
             toc: vec![TocNode {
@@ -444,6 +445,7 @@ mod tests {
         let document = Document {
             blocks: vec![Block::Image(ImageBlock {
                 alt_text: Some("Map of routes".to_string()),
+                source_path: None,
                 chapter_index: 0,
             })],
             toc: Vec::new(),

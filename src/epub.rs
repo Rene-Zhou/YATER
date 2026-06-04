@@ -48,7 +48,8 @@ pub fn open_with_issue_logger(
         let chapter_path = join_zip_path(&opf_base, &item.href);
         let chapter_xml = read_zip_text(&mut archive, &chapter_path)?;
         let start_block = blocks.len();
-        let parsed_chapter = match parse_xhtml_chapter(&chapter_xml, chapter_index) {
+        let chapter_base = zip_parent(&chapter_path);
+        let parsed_chapter = match parse_xhtml_chapter(&chapter_xml, chapter_index, &chapter_base) {
             Ok(chapter) => chapter,
             Err(error) => {
                 log_issue(&format!("malformed HTML: {chapter_path}: {error}"));
@@ -172,7 +173,11 @@ fn parse_package(opf_xml: &str) -> Result<Package, EpubError> {
     })
 }
 
-fn parse_xhtml_chapter(xhtml: &str, chapter_index: usize) -> Result<ParsedChapter, EpubError> {
+fn parse_xhtml_chapter(
+    xhtml: &str,
+    chapter_index: usize,
+    chapter_base: &str,
+) -> Result<ParsedChapter, EpubError> {
     let document = roxmltree::Document::parse(xhtml)
         .map_err(|error| EpubError(format!("invalid XHTML chapter: {error}")))?;
     let mut blocks = Vec::new();
@@ -199,7 +204,11 @@ fn parse_xhtml_chapter(xhtml: &str, chapter_index: usize) -> Result<ParsedChapte
                 && !has_annotation_ancestor(*node)
         })
     {
-        blocks.extend(blocks_from_xhtml_element(node, chapter_index));
+        blocks.extend(blocks_from_xhtml_element(
+            node,
+            chapter_index,
+            chapter_base,
+        ));
     }
 
     Ok(ParsedChapter {
@@ -269,7 +278,11 @@ fn node_text(node: roxmltree::Node<'_, '_>) -> String {
         .to_string()
 }
 
-fn blocks_from_xhtml_element(node: roxmltree::Node<'_, '_>, chapter_index: usize) -> Vec<Block> {
+fn blocks_from_xhtml_element(
+    node: roxmltree::Node<'_, '_>,
+    chapter_index: usize,
+    chapter_base: &str,
+) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut text = String::new();
     let mut annotation_refs = Vec::new();
@@ -277,6 +290,7 @@ fn blocks_from_xhtml_element(node: roxmltree::Node<'_, '_>, chapter_index: usize
     append_visible_blocks(
         node,
         chapter_index,
+        chapter_base,
         &mut blocks,
         &mut text,
         &mut annotation_refs,
@@ -289,6 +303,7 @@ fn blocks_from_xhtml_element(node: roxmltree::Node<'_, '_>, chapter_index: usize
 fn append_visible_blocks(
     node: roxmltree::Node<'_, '_>,
     chapter_index: usize,
+    chapter_base: &str,
     blocks: &mut Vec<Block>,
     text: &mut String,
     annotation_refs: &mut Vec<AnnotationRef>,
@@ -303,6 +318,9 @@ fn append_visible_blocks(
                 flush_text_block(blocks, chapter_index, text, annotation_refs);
                 blocks.push(Block::Image(ImageBlock {
                     alt_text: child.attribute("alt").map(str::to_string),
+                    source_path: child
+                        .attribute("src")
+                        .map(|source_path| join_zip_path(chapter_base, source_path)),
                     chapter_index,
                 }));
                 continue;
@@ -315,7 +333,14 @@ fn append_visible_blocks(
                 });
             }
 
-            append_visible_blocks(child, chapter_index, blocks, text, annotation_refs);
+            append_visible_blocks(
+                child,
+                chapter_index,
+                chapter_base,
+                blocks,
+                text,
+                annotation_refs,
+            );
         }
     }
 }
@@ -469,7 +494,9 @@ mod tests {
         ));
         assert!(matches!(
             &document.blocks[1],
-            Block::Image(block) if block.alt_text.as_deref() == Some("Picture")
+            Block::Image(block)
+                if block.alt_text.as_deref() == Some("Picture")
+                    && block.source_path.as_deref() == Some("OEBPS/images/picture.png")
         ));
         assert!(matches!(
             &document.blocks[2],

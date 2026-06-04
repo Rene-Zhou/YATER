@@ -911,6 +911,7 @@ mod tests {
     fn image_block() -> Block {
         Block::Image(ImageBlock {
             alt_text: Some("diagram".to_string()),
+            source_path: None,
             chapter_index: 0,
         })
     }
