@@ -7,7 +7,7 @@ use crate::sentence::segment_sentences;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
 
 pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     let area = frame.area();
@@ -242,7 +242,10 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, content: Rect, app: &
     };
 
     frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(annotation_text), area);
+    frame.render_widget(
+        Paragraph::new(annotation_text).block(WidgetBlock::default().borders(Borders::ALL)),
+        area,
+    );
 }
 
 struct VisibleAnnotation {
@@ -434,6 +437,35 @@ mod tests {
 
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("Footnote text."));
+    }
+
+    #[test]
+    fn renders_annotation_overlay_with_border() {
+        let mut annotations = HashMap::new();
+        annotations.insert("note-1".to_string(), "Footnote text.".to_string());
+        let document = Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "Text with [1].".to_string(),
+                chapter_index: 0,
+                annotations: vec![AnnotationRef {
+                    id: "note-1".to_string(),
+                    offset: "Text with ".len(),
+                }],
+            })],
+            toc: Vec::new(),
+            annotations,
+            chapter_ranges: Vec::new(),
+        };
+        let mut app = App::new(document);
+        app.apply(Action::OpenAnnotationOverlay);
+        let backend = TestBackend::new(50, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("┌"));
+        assert!(rendered.contains("┘"));
     }
 
     #[test]
