@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -81,6 +81,29 @@ pub fn open_with_issue_logger(
         }
     }
 
+    let spine_idrefs = package
+        .spine_idrefs
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    for (id, item) in &package.manifest {
+        if spine_idrefs.contains(id.as_str())
+            || item.properties.split_whitespace().any(|value| value == "nav")
+            || item.media_type != "application/xhtml+xml"
+        {
+            continue;
+        }
+
+        let item_path = join_zip_path(&opf_base, &item.href);
+        let item_xml = read_zip_text(&mut archive, &item_path)?;
+        let item_annotations = parse_xhtml_annotations(&item_xml).map_err(|error| {
+            EpubError(format!(
+                "invalid XHTML annotations: {item_path}: {error}"
+            ))
+        })?;
+        annotations.extend(item_annotations);
+    }
+
     let toc = if let Some(nav_item) = package.nav_item() {
         let nav_path = join_zip_path(&opf_base, &nav_item.href);
         let nav_xml = read_zip_text(&mut archive, &nav_path)?;
@@ -113,6 +136,7 @@ impl Package {
 struct ManifestItem {
     href: String,
     properties: String,
+    media_type: String,
 }
 
 struct ParsedChapter {
@@ -194,6 +218,7 @@ fn parse_package(opf_xml: &str) -> Result<Package, EpubError> {
                 ManifestItem {
                     href: href.to_string(),
                     properties: node.attribute("properties").unwrap_or("").to_string(),
+                    media_type: node.attribute("media-type").unwrap_or("").to_string(),
                 },
             );
         }
@@ -222,6 +247,24 @@ fn parse_xhtml_chapter(
     let document = roxmltree::Document::parse(xhtml)
         .map_err(|error| EpubError(format!("invalid XHTML chapter: {error}")))?;
     let mut blocks = Vec::new();
+    let annotations = annotations_from_document(&document);
+
+    append_chapter_blocks(document.root_element(), chapter_index, chapter_base, &mut blocks);
+
+    Ok(ParsedChapter {
+        blocks,
+        annotations,
+    })
+}
+
+fn parse_xhtml_annotations(xhtml: &str) -> Result<AnnotationStore, EpubError> {
+    let document = roxmltree::Document::parse(xhtml)
+        .map_err(|error| EpubError(format!("invalid XHTML annotation document: {error}")))?;
+
+    Ok(annotations_from_document(&document))
+}
+
+fn annotations_from_document(document: &roxmltree::Document<'_>) -> AnnotationStore {
     let mut annotations = AnnotationStore::new();
 
     for node in document
@@ -237,12 +280,7 @@ fn parse_xhtml_chapter(
         }
     }
 
-    append_chapter_blocks(document.root_element(), chapter_index, chapter_base, &mut blocks);
-
-    Ok(ParsedChapter {
-        blocks,
-        annotations,
-    })
+    annotations
 }
 
 fn parse_toc(
@@ -676,6 +714,60 @@ mod tests {
     }
 
     #[test]
+    fn extracts_annotations_from_non_spine_xhtml_note_files() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_extra_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Text with <a href="notes.xhtml#note-1">[1]</a>.</p>
+  </body>
+</html>"##,
+            )],
+            &[(
+                "notes",
+                "notes.xhtml",
+                "application/xhtml+xml",
+                r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <aside id="note-1"><p>Separate note text.</p></aside>
+  </body>
+</html>"##,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let block = document.text_block(0).expect("first text block");
+
+        assert_eq!(
+            block.annotations,
+            vec![AnnotationRef {
+                id: "note-1".to_string(),
+                offset: "Text with ".len(),
+            }]
+        );
+        assert_eq!(
+            document.annotation_text("note-1"),
+            Some("Separate note text.")
+        );
+    }
+
+    #[test]
     fn preserves_block_breaks_in_annotation_plain_text() {
         let tempdir = tempdir().expect("temp dir");
         let epub_path = tempdir.path().join("book.epub");
@@ -950,6 +1042,16 @@ mod tests {
         nav_xhtml: &str,
         image_file: Option<(&str, &[u8])>,
     ) {
+        write_epub_with_extra_files(path, chapters, &[], nav_xhtml, image_file);
+    }
+
+    fn write_epub_with_extra_files(
+        path: &Path,
+        chapters: &[(&str, &str, &str)],
+        extra_files: &[(&str, &str, &str, &str)],
+        nav_xhtml: &str,
+        image_file: Option<(&str, &[u8])>,
+    ) {
         let file = File::create(path).expect("create epub");
         let mut writer = ZipWriter::new(file);
         let options = SimpleFileOptions::default();
@@ -991,6 +1093,9 @@ mod tests {
                     .map(|(id, href, _)| format!(
                         r#"    <item id="{id}" href="{href}" media-type="application/xhtml+xml"/>"#
                     ))
+                    .chain(extra_files.iter().map(|(id, href, media_type, _)| format!(
+                        r#"    <item id="{id}" href="{href}" media-type="{media_type}"/>"#
+                    )))
                     .collect::<Vec<_>>()
                     .join("\n"),
                 chapters
@@ -1007,6 +1112,14 @@ mod tests {
                 options,
                 &format!("OEBPS/{href}"),
                 chapter_xhtml,
+            );
+        }
+        for (_, href, _, contents) in extra_files {
+            write_zip_file(
+                &mut writer,
+                options,
+                &format!("OEBPS/{href}"),
+                contents,
             );
         }
         if let Some((name, contents)) = image_file {
