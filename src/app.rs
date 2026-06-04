@@ -80,7 +80,13 @@ impl App {
 
     pub fn with_restored_progress(document: Document, progress: Option<Progress>) -> Self {
         let position = progress
-            .filter(|progress| progress.block_index < document.blocks.len())
+            .filter(|progress| {
+                Self::is_valid_reading_position(
+                    &document,
+                    progress.block_index,
+                    progress.sentence_offset,
+                )
+            })
             .map(|progress| ReadingPosition {
                 block_index: progress.block_index,
                 sentence_offset: progress.sentence_offset,
@@ -91,6 +97,20 @@ impl App {
             });
 
         Self::with_position(document, position)
+    }
+
+    fn is_valid_reading_position(
+        document: &Document,
+        block_index: usize,
+        sentence_offset: usize,
+    ) -> bool {
+        match document.blocks.get(block_index) {
+            Some(Block::Text(block)) => segment_sentences(&block.text)
+                .into_iter()
+                .any(|range| range.0 == sentence_offset),
+            Some(Block::Image(_)) => sentence_offset == 0,
+            None => false,
+        }
     }
 
     pub fn position(&self) -> ReadingPosition {
@@ -684,6 +704,32 @@ mod tests {
                 block_index: 0,
                 sentence_offset: 0,
                 timestamp: "2026-06-03T12:01:00Z".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn stale_sentence_offsets_restore_to_book_start() {
+        let document = Document {
+            blocks: vec![text_block("First. Second.")],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::with_restored_progress(
+            document,
+            Some(Progress {
+                block_index: 0,
+                sentence_offset: 1,
+                timestamp: "2026-06-03T12:00:00Z".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            app.position(),
+            ReadingPosition {
+                block_index: 0,
+                sentence_offset: 0,
             }
         );
     }
