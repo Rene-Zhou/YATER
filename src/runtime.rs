@@ -77,10 +77,10 @@ pub fn handle_key_with_progress(
         return Ok(true);
     }
 
-    let should_save = saves_progress_after(action);
+    let position_before = app.position();
     app.apply(action);
 
-    if should_save {
+    if saves_progress_after(action) && app.position() != position_before {
         save_progress(app.progress(timestamp()))?;
     }
 
@@ -187,10 +187,10 @@ where
                     break;
                 }
 
-                let should_save = saves_progress_after(action);
+                let position_before = app.position();
                 app.apply(action);
 
-                if should_save {
+                if saves_progress_after(action) && app.position() != position_before {
                     pending_progress = Some(app.progress(timestamp()));
                 }
 
@@ -270,7 +270,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    use crate::document::{Block, Document, TextBlock};
+    use crate::document::{Block, Document, TextBlock, TocNode};
     use crate::image::SelectedImageMode;
     use crate::input::Focus;
     use crate::progress::Progress;
@@ -509,6 +509,34 @@ mod tests {
         .expect("handle key");
 
         assert_eq!(app.focus(), Focus::Toc);
+        assert_eq!(save_count, 0);
+    }
+
+    #[test]
+    fn handle_key_with_progress_does_not_save_for_toc_expand_only_action() {
+        let mut app = build_app(
+            Path::new("/books/book.epub"),
+            |_| Ok(toc_document()),
+            |_| Ok(None),
+        )
+        .expect("build app");
+        app.apply(crate::input::Action::OpenToc);
+        app.apply(crate::input::Action::CollapseOrParentToc);
+        let mut save_count = 0;
+
+        super::handle_key_with_progress(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            || "2026-06-04T12:00:00Z".to_string(),
+            |_| {
+                save_count += 1;
+                Ok(())
+            },
+        )
+        .expect("handle key");
+
+        assert_eq!(app.focus(), Focus::Toc);
+        assert_eq!(app.position().block_index, 0);
         assert_eq!(save_count, 0);
     }
 
@@ -760,5 +788,33 @@ mod tests {
                 timestamp: "2026-06-04T12:00:00Z".to_string(),
             }]
         );
+    }
+
+    fn toc_document() -> Document {
+        Document {
+            blocks: vec![
+                Block::Text(TextBlock {
+                    text: "Chapter one.".to_string(),
+                    chapter_index: 0,
+                    annotations: Vec::new(),
+                }),
+                Block::Text(TextBlock {
+                    text: "Section one.".to_string(),
+                    chapter_index: 0,
+                    annotations: Vec::new(),
+                }),
+            ],
+            toc: vec![TocNode {
+                title: "Chapter One".to_string(),
+                target_block_index: 0,
+                children: vec![TocNode {
+                    title: "Section One".to_string(),
+                    target_block_index: 1,
+                    children: Vec::new(),
+                }],
+            }],
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        }
     }
 }
