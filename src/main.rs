@@ -98,9 +98,21 @@ fn main() {
         )
             .map_err(|error| TerminalError::new(error.to_string()))
     }) {
-        eprintln!("terminal error: {error}");
+        report_terminal_error(&error, issue_log.as_ref(), current_timestamp);
         std::process::exit(1);
     };
+}
+
+fn report_terminal_error(
+    error: &TerminalError,
+    issue_log: Option<&IssueLog>,
+    timestamp: impl FnOnce() -> String,
+) {
+    eprintln!("terminal error: {error}");
+
+    if let Some(log) = issue_log {
+        let _ = log.append(timestamp(), format!("terminal error: {error}"));
+    }
 }
 
 fn current_timestamp() -> String {
@@ -108,4 +120,31 @@ fn current_timestamp() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "0".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::report_terminal_error;
+    use tempfile::tempdir;
+    use yater::issue_log::IssueLog;
+    use yater::terminal::TerminalError;
+
+    #[test]
+    fn terminal_errors_are_logged_when_issue_log_is_available() {
+        let tempdir = tempdir().expect("tempdir");
+        let log_path = tempdir.path().join("state/yater/yater.log");
+        let issue_log = IssueLog::new(log_path.clone());
+
+        report_terminal_error(
+            &TerminalError::new("runtime panicked: render panic"),
+            Some(&issue_log),
+            || "123".to_string(),
+        );
+
+        let contents = std::fs::read_to_string(log_path).expect("read log");
+        assert_eq!(
+            contents,
+            "123 terminal error: runtime panicked: render panic\n"
+        );
+    }
 }
