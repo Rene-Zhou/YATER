@@ -5,7 +5,7 @@ use crate::input::Focus;
 use crate::sentence::segment_sentences;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
@@ -28,7 +28,7 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         .unwrap_or("");
     frame.render_widget(Paragraph::new(chapter_title).centered(), top_bar);
 
-    frame.render_widget(Paragraph::new(current_content_line(app)), content);
+    frame.render_widget(Paragraph::new(current_content_lines(app, content)), content);
 
     if app.focus() == Focus::Toc {
         draw_toc(frame, content, app);
@@ -42,7 +42,7 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     }
 }
 
-fn current_content_line(app: &App) -> Line<'static> {
+fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
     let document = app.document();
     let position = app.position();
 
@@ -54,21 +54,73 @@ fn current_content_line(app: &App) -> Line<'static> {
                 .map(|range| block.text[range.0..range.1].to_string())
                 .unwrap_or_default();
 
-            Line::from(Span::styled(
+            vec![Line::from(Span::styled(
                 current_sentence,
                 Style::default().add_modifier(Modifier::REVERSED),
-            ))
+            ))]
         }
         Some(Block::Image(image)) => {
             let label = image.alt_text.as_deref().unwrap_or("untitled");
             match app.image_mode() {
-                SelectedImageMode::Off => Line::from(format!("[image disabled: {label}]")),
-                SelectedImageMode::Sixel | SelectedImageMode::Halfblock => {
-                    Line::from(format!("[image: {label}]"))
+                SelectedImageMode::Off => vec![Line::from(format!("[image disabled: {label}]"))],
+                SelectedImageMode::Sixel => vec![Line::from(format!("[image: {label}]"))],
+                SelectedImageMode::Halfblock => {
+                    image
+                        .data
+                        .as_deref()
+                        .and_then(|data| render_halfblock_image(data, content.width, content.height))
+                        .unwrap_or_else(|| vec![Line::from(format!("[image: {label}]"))])
                 }
             }
         }
-        None => Line::default(),
+        None => vec![Line::default()],
+    }
+}
+
+fn render_halfblock_image(
+    data: &[u8],
+    terminal_width: u16,
+    terminal_height: u16,
+) -> Option<Vec<Line<'static>>> {
+    if terminal_width == 0 || terminal_height == 0 {
+        return None;
+    }
+
+    let image = ::image::load_from_memory(data).ok()?.to_rgba8();
+    let width = image.width().min(terminal_width as u32);
+    let height = image.height().min((terminal_height as u32).saturating_mul(2));
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let mut lines = Vec::new();
+    for y in (0..height).step_by(2) {
+        let mut spans = Vec::new();
+        for x in 0..width {
+            let top = image.get_pixel(x, y);
+            let bottom = if y + 1 < height {
+                image.get_pixel(x, y + 1)
+            } else {
+                top
+            };
+            spans.push(Span::styled(
+                "▀",
+                Style::default()
+                    .fg(rgba_to_color(top.0))
+                    .bg(rgba_to_color(bottom.0)),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    Some(lines)
+}
+
+fn rgba_to_color([red, green, blue, alpha]: [u8; 4]) -> Color {
+    if alpha == 0 {
+        Color::Reset
+    } else {
+        Color::Rgb(red, green, blue)
     }
 }
 
@@ -231,6 +283,7 @@ fn current_annotation(app: &App) -> Option<VisibleAnnotation> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::Cursor;
 
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -442,6 +495,30 @@ mod tests {
     }
 
     #[test]
+    fn renders_halfblock_image_when_data_is_loaded() {
+        let document = Document {
+            blocks: vec![Block::Image(ImageBlock {
+                alt_text: Some("Map of routes".to_string()),
+                source_path: Some("OEBPS/images/map.png".to_string()),
+                data: Some(test_png_bytes()),
+                chapter_index: 0,
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::with_image_mode(document, crate::image::SelectedImageMode::Halfblock);
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("▀▀"));
+        assert!(!rendered.contains("[image: Map of routes]"));
+    }
+
+    #[test]
     fn renders_disabled_image_placeholder_when_image_mode_is_off() {
         let document = Document {
             blocks: vec![Block::Image(ImageBlock {
@@ -495,5 +572,19 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn test_png_bytes() -> Vec<u8> {
+        let image = ::image::RgbaImage::from_fn(2, 2, |x, y| match (x, y) {
+            (0, 0) => ::image::Rgba([255, 0, 0, 255]),
+            (1, 0) => ::image::Rgba([0, 255, 0, 255]),
+            (0, 1) => ::image::Rgba([0, 0, 255, 255]),
+            _ => ::image::Rgba([255, 255, 255, 255]),
+        });
+        let mut bytes = Cursor::new(Vec::new());
+        ::image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, ::image::ImageFormat::Png)
+            .expect("encode png");
+        bytes.into_inner()
     }
 }

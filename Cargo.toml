@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 ratatui = "0.29.0"
 roxmltree = "0.21.1"
 serde = { version = "1", features = ["derive"] }
