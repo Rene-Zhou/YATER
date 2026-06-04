@@ -48,16 +48,30 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
 
     match document.blocks.get(position.block_index) {
         Some(Block::Text(block)) => {
-            let current_sentence = segment_sentences(&block.text)
-                .into_iter()
-                .find(|range| range.0 == position.sentence_offset)
-                .map(|range| block.text[range.0..range.1].to_string())
-                .unwrap_or_default();
+            let mut spans = Vec::new();
+            let mut cursor = 0;
+            for range in segment_sentences(&block.text) {
+                if cursor < range.0 {
+                    spans.push(Span::raw(block.text[cursor..range.0].to_string()));
+                }
 
-            vec![Line::from(Span::styled(
-                current_sentence,
-                Style::default().add_modifier(Modifier::REVERSED),
-            ))]
+                let sentence = block.text[range.0..range.1].to_string();
+                if range.0 == position.sentence_offset {
+                    spans.push(Span::styled(
+                        sentence,
+                        Style::default().add_modifier(Modifier::REVERSED),
+                    ));
+                } else {
+                    spans.push(Span::raw(sentence));
+                }
+                cursor = range.1;
+            }
+
+            if cursor < block.text.len() {
+                spans.push(Span::raw(block.text[cursor..].to_string()));
+            }
+
+            vec![Line::from(spans)]
         }
         Some(Block::Image(image)) => {
             let label = image.alt_text.as_deref().unwrap_or("untitled");
@@ -314,6 +328,36 @@ mod tests {
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("Chapter One"));
         assert!(rendered.contains("Second sentence."));
+    }
+
+    #[test]
+    fn renders_surrounding_paragraph_text_around_current_sentence() {
+        let document = Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "First sentence. Second sentence. Third sentence.".to_string(),
+                chapter_index: 0,
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::with_position(
+            document,
+            ReadingPosition {
+                block_index: 0,
+                sentence_offset: "First sentence.".len(),
+            },
+        );
+        let backend = TestBackend::new(80, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("First sentence."));
+        assert!(rendered.contains("Second sentence."));
+        assert!(rendered.contains("Third sentence."));
     }
 
     #[test]
