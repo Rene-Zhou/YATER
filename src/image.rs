@@ -80,9 +80,9 @@ pub fn select_image_mode(mode: ImageMode, support: ImageModeSupport) -> Selected
         ImageMode::Sixel => SelectedImageMode::Sixel,
         ImageMode::Halfblock => SelectedImageMode::Halfblock,
         ImageMode::Off => SelectedImageMode::Off,
+        ImageMode::Auto if support.sixel => SelectedImageMode::Sixel,
         ImageMode::Auto if support.kitty => SelectedImageMode::Kitty,
         ImageMode::Auto if support.iterm2 => SelectedImageMode::Iterm2,
-        ImageMode::Auto if support.sixel => SelectedImageMode::Sixel,
         ImageMode::Auto if support.halfblock => SelectedImageMode::Halfblock,
         ImageMode::Auto => SelectedImageMode::Off,
     }
@@ -140,13 +140,28 @@ mod tests {
     }
 
     #[test]
-    fn auto_prefers_kitty_when_supported() {
+    fn auto_prefers_sixel_over_kitty_when_both_are_supported() {
         let selected = select_image_mode(
             ImageMode::Auto,
             ImageModeSupport {
                 kitty: true,
                 iterm2: false,
                 sixel: true,
+                halfblock: true,
+            },
+        );
+
+        assert_eq!(selected, SelectedImageMode::Sixel);
+    }
+
+    #[test]
+    fn auto_falls_back_to_kitty_without_sixel() {
+        let selected = select_image_mode(
+            ImageMode::Auto,
+            ImageModeSupport {
+                kitty: true,
+                iterm2: false,
+                sixel: false,
                 halfblock: true,
             },
         );
