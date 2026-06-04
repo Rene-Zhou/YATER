@@ -75,8 +75,6 @@ impl SelectedImageMode {
 
 pub fn select_image_mode(mode: ImageMode, support: ImageModeSupport) -> SelectedImageMode {
     match mode {
-        ImageMode::Kitty => SelectedImageMode::Kitty,
-        ImageMode::Iterm2 => SelectedImageMode::Iterm2,
         ImageMode::Sixel => SelectedImageMode::Sixel,
         ImageMode::Halfblock => SelectedImageMode::Halfblock,
         ImageMode::Off => SelectedImageMode::Off,
