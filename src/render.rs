@@ -257,8 +257,8 @@ fn append_toc_rows<'a>(
     }
     rows.push(row);
 
-    let child_prefix = if prefix.is_empty() {
-        String::new()
+    let child_prefix = if !show_branch {
+        prefix.to_string()
     } else if is_last {
         format!("{prefix}  ")
     } else {
@@ -500,6 +500,20 @@ mod tests {
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("▾ Chapter One"));
         assert!(rendered.contains("└ Section One"));
+    }
+
+    #[test]
+    fn renders_nested_toc_indent_guides() {
+        let mut app = App::new(branching_toc_document());
+        app.apply(Action::OpenToc);
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("├ ▾ Section One"));
+        assert!(rendered.contains("│ └ Subsection One"));
     }
 
     #[test]
@@ -939,6 +953,41 @@ mod tests {
                     children: Vec::new(),
                 })
                 .collect(),
+            }],
+            annotations: HashMap::new(),
+            chapter_ranges: vec![ChapterRange {
+                start_block: 0,
+                end_block: 0,
+            }],
+        }
+    }
+
+    fn branching_toc_document() -> Document {
+        Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "First sentence.".to_string(),
+                chapter_index: 0,
+                annotations: Vec::new(),
+            })],
+            toc: vec![TocNode {
+                title: "Chapter One".to_string(),
+                target_block_index: 0,
+                children: vec![
+                    TocNode {
+                        title: "Section One".to_string(),
+                        target_block_index: 0,
+                        children: vec![TocNode {
+                            title: "Subsection One".to_string(),
+                            target_block_index: 0,
+                            children: Vec::new(),
+                        }],
+                    },
+                    TocNode {
+                        title: "Section Two".to_string(),
+                        target_block_index: 0,
+                        children: Vec::new(),
+                    },
+                ],
             }],
             annotations: HashMap::new(),
             chapter_ranges: vec![ChapterRange {
