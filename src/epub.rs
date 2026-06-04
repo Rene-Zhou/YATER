@@ -259,32 +259,56 @@ fn parse_toc(
 ) -> Result<Vec<TocNode>, EpubError> {
     let document = roxmltree::Document::parse(nav_xml)
         .map_err(|error| EpubError(format!("invalid EPUB nav document: {error}")))?;
-    let mut toc = Vec::new();
-
-    for link in document
+    let Some(root_list) = document
         .descendants()
-        .filter(|node| node.is_element() && node.tag_name().name() == "a")
-    {
-        let Some(href) = link.attribute("href") else {
-            continue;
-        };
-        let href_without_fragment = href.split('#').next().unwrap_or(href);
-        let target_path = join_zip_path(opf_base, href_without_fragment);
-        let Some(target_block_index) = target_blocks_by_href.get(&target_path) else {
-            continue;
-        };
-        let title = link.text().unwrap_or("").trim();
+        .find(|node| node.is_element() && node.tag_name().name() == "ol")
+    else {
+        return Ok(Vec::new());
+    };
 
-        if !title.is_empty() {
-            toc.push(TocNode {
-                title: title.to_string(),
-                target_block_index: *target_block_index,
-                children: Vec::new(),
-            });
-        }
+    Ok(parse_toc_list(root_list, opf_base, target_blocks_by_href))
+}
+
+fn parse_toc_list(
+    list: roxmltree::Node<'_, '_>,
+    opf_base: &str,
+    target_blocks_by_href: &HashMap<String, usize>,
+) -> Vec<TocNode> {
+    list.children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "li")
+        .filter_map(|node| parse_toc_item(node, opf_base, target_blocks_by_href))
+        .collect()
+}
+
+fn parse_toc_item(
+    item: roxmltree::Node<'_, '_>,
+    opf_base: &str,
+    target_blocks_by_href: &HashMap<String, usize>,
+) -> Option<TocNode> {
+    let link = item
+        .children()
+        .find(|node| node.is_element() && node.tag_name().name() == "a")?;
+    let href = link.attribute("href")?;
+    let href_without_fragment = href.split('#').next().unwrap_or(href);
+    let target_path = join_zip_path(opf_base, href_without_fragment);
+    let target_block_index = *target_blocks_by_href.get(&target_path)?;
+    let title = link.text().unwrap_or("").trim();
+
+    if title.is_empty() {
+        return None;
     }
 
-    Ok(toc)
+    let children = item
+        .children()
+        .find(|node| node.is_element() && node.tag_name().name() == "ol")
+        .map(|list| parse_toc_list(list, opf_base, target_blocks_by_href))
+        .unwrap_or_default();
+
+    Some(TocNode {
+        title: title.to_string(),
+        target_block_index,
+        children,
+    })
 }
 
 fn is_text_block_element(name: &str) -> bool {
@@ -600,6 +624,58 @@ mod tests {
         assert!(issues[0].contains("bad image: OEBPS/images/missing.png"));
     }
 
+    #[test]
+    fn parses_nested_nav_toc_tree() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_files(
+            &epub_path,
+            &[
+                (
+                    "chapter1",
+                    "chapter1.xhtml",
+                    r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><h1>Chapter One</h1></body>
+</html>"#,
+                ),
+                (
+                    "chapter2",
+                    "chapter2.xhtml",
+                    r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><h2>Section One</h2></body>
+</html>"#,
+                ),
+            ],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol>
+        <li>
+          <a href="chapter1.xhtml">Chapter One</a>
+          <ol>
+            <li><a href="chapter2.xhtml">Section One</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(document.toc.len(), 1);
+        assert_eq!(document.toc[0].title, "Chapter One");
+        assert_eq!(document.toc[0].target_block_index, 0);
+        assert_eq!(document.toc[0].children.len(), 1);
+        assert_eq!(document.toc[0].children[0].title, "Section One");
+        assert_eq!(document.toc[0].children[0].target_block_index, 1);
+    }
+
     fn write_minimal_epub(path: &Path, chapter_xhtml: &str) {
         write_epub(
             path,
@@ -613,6 +689,27 @@ mod tests {
     }
 
     fn write_epub(path: &Path, chapter_xhtml: &str, image_file: Option<(&str, &[u8])>) {
+        write_epub_with_files(
+            path,
+            &[("chapter1", "chapter1.xhtml", chapter_xhtml)],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            image_file,
+        );
+    }
+
+    fn write_epub_with_files(
+        path: &Path,
+        chapters: &[(&str, &str, &str)],
+        nav_xhtml: &str,
+        image_file: Option<(&str, &[u8])>,
+    ) {
         let file = File::create(path).expect("create epub");
         let mut writer = ZipWriter::new(file);
         let options = SimpleFileOptions::default();
@@ -638,36 +735,40 @@ mod tests {
             &mut writer,
             options,
             "OEBPS/content.opf",
-            r#"<?xml version="1.0"?>
+            &format!(
+                r#"<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+{}
   </manifest>
   <spine>
-    <itemref idref="chapter1"/>
+{}
   </spine>
-</package>"#,
+"</package>"#,
+                chapters
+                    .iter()
+                    .map(|(id, href, _)| format!(
+                        r#"    <item id="{id}" href="{href}" media-type="application/xhtml+xml"/>"#
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                chapters
+                    .iter()
+                    .map(|(id, _, _)| format!(r#"    <itemref idref="{id}"/>"#))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
         );
-        write_zip_file(
-            &mut writer,
-            options,
-            "OEBPS/nav.xhtml",
-            r#"<?xml version="1.0"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-  <body>
-    <nav epub:type="toc">
-      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
-    </nav>
-  </body>
-</html>"#,
-        );
-        write_zip_file(
-            &mut writer,
-            options,
-            "OEBPS/chapter1.xhtml",
-            chapter_xhtml,
-        );
+        write_zip_file(&mut writer, options, "OEBPS/nav.xhtml", nav_xhtml);
+        for (_, href, chapter_xhtml) in chapters {
+            write_zip_file(
+                &mut writer,
+                options,
+                &format!("OEBPS/{href}"),
+                chapter_xhtml,
+            );
+        }
         if let Some((name, contents)) = image_file {
             write_zip_bytes(&mut writer, options, name, contents);
         }
