@@ -195,7 +195,11 @@ fn append_toc_rows<'a>(
     } else {
         "├ ".to_string()
     };
-    rows.push(Line::from(format!("{prefix}{branch}{marker}{}", node.title)));
+    let mut row = Line::from(format!("{prefix}{branch}{marker}{}", node.title));
+    if rows.len() == app.selected_toc_row() {
+        row = row.style(Style::default().add_modifier(Modifier::REVERSED));
+    }
+    rows.push(row);
 
     let child_prefix = if prefix.is_empty() {
         String::new()
@@ -309,6 +313,7 @@ mod tests {
     use std::io::Cursor;
 
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
     use ratatui::Terminal;
 
     use crate::app::{App, ReadingPosition};
@@ -393,6 +398,23 @@ mod tests {
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("▾ Chapter One"));
         assert!(rendered.contains("└ Section One"));
+    }
+
+    #[test]
+    fn renders_selected_toc_row_highlighted() {
+        let mut app = App::new(test_document());
+        app.apply(Action::OpenToc);
+        app.apply(Action::NextTocItem);
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert!(row_with_text_has_modifier(
+            terminal.backend().buffer(),
+            "Section One",
+            Modifier::REVERSED,
+        ));
     }
 
     #[test]
@@ -677,6 +699,20 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn row_with_text_has_modifier(
+        buffer: &ratatui::buffer::Buffer,
+        text: &str,
+        modifier: Modifier,
+    ) -> bool {
+        buffer
+            .content()
+            .chunks(buffer.area.width as usize)
+            .any(|row| {
+                let row_text = row.iter().map(|cell| cell.symbol()).collect::<String>();
+                row_text.contains(text) && row.iter().any(|cell| cell.modifier.contains(modifier))
+            })
     }
 
     fn test_png_bytes() -> Vec<u8> {
