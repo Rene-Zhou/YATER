@@ -121,6 +121,10 @@ impl App {
         self.image_mode
     }
 
+    pub fn set_image_mode(&mut self, image_mode: SelectedImageMode) {
+        self.image_mode = image_mode;
+    }
+
     pub fn is_toc_path_collapsed(&self, path: &[usize]) -> bool {
         self.collapsed_toc_paths.iter().any(|collapsed_path| collapsed_path == path)
     }
@@ -835,6 +839,23 @@ mod tests {
         );
 
         assert_eq!(app.image_mode(), crate::image::SelectedImageMode::Off);
+    }
+
+    #[test]
+    fn app_updates_selected_image_mode_after_detection() {
+        let mut app = App::with_image_mode(
+            Document {
+                blocks: vec![image_block()],
+                toc: Vec::new(),
+                annotations: HashMap::new(),
+                chapter_ranges: Vec::new(),
+            },
+            crate::image::SelectedImageMode::Halfblock,
+        );
+
+        app.set_image_mode(crate::image::SelectedImageMode::Sixel);
+
+        assert_eq!(app.image_mode(), crate::image::SelectedImageMode::Sixel);
     }
 
     #[test]

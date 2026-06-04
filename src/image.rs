@@ -13,6 +13,23 @@ impl ImageModeSupport {
             halfblock: true,
         }
     }
+
+    pub fn from_ratatui_capabilities<'a>(
+        capabilities: impl IntoIterator<Item = &'a ratatui_image::picker::Capability>,
+    ) -> Self {
+        Self {
+            sixel: capabilities
+                .into_iter()
+                .any(|capability| matches!(capability, ratatui_image::picker::Capability::Sixel)),
+            halfblock: true,
+        }
+    }
+
+    pub fn detect_terminal() -> Self {
+        ratatui_image::picker::Picker::from_query_stdio()
+            .map(|picker| Self::from_ratatui_capabilities(picker.capabilities()))
+            .unwrap_or_else(|_| Self::terminal_default())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,5 +93,16 @@ mod tests {
         );
 
         assert_eq!(selected, SelectedImageMode::Off);
+    }
+
+    #[test]
+    fn ratatui_sixel_capability_enables_sixel_auto_mode() {
+        let capabilities = [ratatui_image::picker::Capability::Sixel];
+        let support = ImageModeSupport::from_ratatui_capabilities(&capabilities);
+
+        assert_eq!(
+            select_image_mode(ImageMode::Auto, support),
+            SelectedImageMode::Sixel
+        );
     }
 }

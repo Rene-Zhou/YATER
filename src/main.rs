@@ -74,6 +74,9 @@ fn main() {
         let backend = CrosstermBackend::new(std::io::stdout());
         let mut terminal =
             Terminal::new(backend).map_err(|error| TerminalError::new(error.to_string()))?;
+        let detected_image_mode =
+            select_image_mode(cli.image_mode, ImageModeSupport::detect_terminal());
+        app.set_image_mode(detected_image_mode);
         let mut events = CrosstermEventSource;
         let progress_store = ProgressStore::from_env();
         let book_path = cli.file.clone();
