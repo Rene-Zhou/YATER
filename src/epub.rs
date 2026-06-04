@@ -465,6 +465,11 @@ fn append_visible_blocks(
                 text.push_str(child_text);
             }
         } else if child.is_element() {
+            if child.tag_name().name() == "br" {
+                text.push('\n');
+                continue;
+            }
+
             if is_text_block_element(child.tag_name().name()) {
                 flush_text_block(blocks, chapter_index, text, annotation_refs);
                 blocks.extend(blocks_from_xhtml_element(
@@ -658,6 +663,28 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec!["First nested paragraph.", "Second nested paragraph."]
+        );
+    }
+
+    #[test]
+    fn preserves_inline_line_breaks_in_text_blocks() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>First line.<br/>Second line.</p>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.text_block(0).map(|block| block.text.as_str()),
+            Some("First line.\nSecond line.")
         );
     }
 
