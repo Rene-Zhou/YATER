@@ -274,7 +274,7 @@ impl App {
             return;
         };
 
-        if let Some(block_index) = self.first_text_block_in_range(range) {
+        if let Some(block_index) = self.first_reading_block_in_range(range) {
             self.position = ReadingPosition {
                 block_index,
                 sentence_offset: 0,
@@ -290,7 +290,7 @@ impl App {
             return;
         };
 
-        if let Some((block_index, sentence_offset)) = self.last_sentence_in_range(range) {
+        if let Some((block_index, sentence_offset)) = self.last_reading_position_in_range(range) {
             self.position = ReadingPosition {
                 block_index,
                 sentence_offset,
@@ -298,38 +298,26 @@ impl App {
         }
     }
 
-    fn first_text_block_in_range(&self, range: ChapterRange) -> Option<usize> {
-        self.document
-            .blocks
-            .iter()
-            .enumerate()
-            .take(range.end_block + 1)
-            .skip(range.start_block)
-            .find_map(|(index, block)| match block {
-                Block::Text(_) => Some(index),
-                Block::Image(_) => None,
-            })
+    fn first_reading_block_in_range(&self, range: ChapterRange) -> Option<usize> {
+        (range.start_block < self.document.blocks.len()
+            && range.start_block <= range.end_block)
+            .then_some(range.start_block)
     }
 
-    fn last_sentence_in_range(&self, range: ChapterRange) -> Option<(usize, usize)> {
-        self.document
-            .blocks
-            .iter()
-            .enumerate()
-            .take(range.end_block + 1)
-            .skip(range.start_block)
-            .rev()
-            .find_map(|(index, block)| match block {
-                Block::Text(block) => {
-                    let sentence_offset = segment_sentences(&block.text)
-                        .last()
-                        .map(|sentence| sentence.0)
-                        .unwrap_or(0);
+    fn last_reading_position_in_range(&self, range: ChapterRange) -> Option<(usize, usize)> {
+        if range.start_block > range.end_block || range.end_block >= self.document.blocks.len() {
+            return None;
+        }
 
-                    Some((index, sentence_offset))
-                }
-                Block::Image(_) => None,
-            })
+        let sentence_offset = match &self.document.blocks[range.end_block] {
+            Block::Text(block) => segment_sentences(&block.text)
+                .last()
+                .map(|sentence| sentence.0)
+                .unwrap_or(0),
+            Block::Image(_) => 0,
+        };
+
+        Some((range.end_block, sentence_offset))
     }
 
     fn next_toc_item(&mut self) {
@@ -740,6 +728,54 @@ mod tests {
             app.position(),
             ReadingPosition {
                 block_index: 1,
+                sentence_offset: 0
+            }
+        );
+    }
+
+    #[test]
+    fn chapter_navigation_jumps_to_image_edge_blocks() {
+        let mut app = App::with_position(
+            Document {
+                blocks: vec![
+                    text_block("Previous chapter."),
+                    image_block(),
+                    text_block("Middle."),
+                    image_block(),
+                ],
+                toc: Vec::new(),
+                annotations: HashMap::new(),
+                chapter_ranges: vec![
+                    ChapterRange {
+                        start_block: 0,
+                        end_block: 0,
+                    },
+                    ChapterRange {
+                        start_block: 1,
+                        end_block: 3,
+                    },
+                ],
+            },
+            ReadingPosition {
+                block_index: 2,
+                sentence_offset: 0,
+            },
+        );
+
+        app.apply(Action::JumpToChapterStart);
+        assert_eq!(
+            app.position(),
+            ReadingPosition {
+                block_index: 1,
+                sentence_offset: 0
+            }
+        );
+
+        app.apply(Action::JumpToChapterEnd);
+        assert_eq!(
+            app.position(),
+            ReadingPosition {
+                block_index: 3,
                 sentence_offset: 0
             }
         );
