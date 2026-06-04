@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use crate::app::App;
 use crate::document::Document;
@@ -6,6 +7,8 @@ use crate::image::SelectedImageMode;
 use crate::input::{map_key, Action};
 use crate::progress::Progress;
 use crate::render;
+
+const PROGRESS_SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub struct RuntimeError(String);
@@ -134,15 +137,30 @@ pub fn run_terminal_loop<B: ratatui::backend::Backend>(
     Ok(())
 }
 
+#[derive(Debug)]
+pub enum RuntimeEvent {
+    Terminal(crossterm::event::Event),
+    ProgressDebounceElapsed,
+}
+
 pub trait EventSource {
-    fn next_event(&mut self) -> Result<crossterm::event::Event, RuntimeError>;
+    fn next_event(&mut self) -> Result<RuntimeEvent, RuntimeError>;
 }
 
 pub struct CrosstermEventSource;
 
 impl EventSource for CrosstermEventSource {
-    fn next_event(&mut self) -> Result<crossterm::event::Event, RuntimeError> {
-        crossterm::event::read().map_err(|error| RuntimeError::new(error.to_string()))
+    fn next_event(&mut self) -> Result<RuntimeEvent, RuntimeError> {
+        let has_event = crossterm::event::poll(PROGRESS_SAVE_DEBOUNCE)
+            .map_err(|error| RuntimeError::new(error.to_string()))?;
+
+        if has_event {
+            crossterm::event::read()
+                .map(RuntimeEvent::Terminal)
+                .map_err(|error| RuntimeError::new(error.to_string()))
+        } else {
+            Ok(RuntimeEvent::ProgressDebounceElapsed)
+        }
     }
 }
 
@@ -167,9 +185,56 @@ where
     B: ratatui::backend::Backend,
     E: EventSource,
 {
-    run_terminal_event_loop_with_key_handler(terminal, app, events, |app, key| {
-        handle_key_with_progress(app, key, &mut timestamp, &mut save_progress)
-    })
+    terminal
+        .draw(|frame| render::draw(frame, app))
+        .map_err(|error| RuntimeError::new(error.to_string()))?;
+
+    let mut pending_progress = None;
+
+    loop {
+        match events.next_event()? {
+            RuntimeEvent::Terminal(crossterm::event::Event::Key(key)) => {
+                let action = map_key(app.focus(), key);
+                if action == Action::Quit {
+                    flush_pending_progress(&mut pending_progress, &mut save_progress)?;
+                    break;
+                }
+
+                let should_save = saves_progress_after(action);
+                app.apply(action);
+
+                if should_save {
+                    pending_progress = Some(app.progress(timestamp()));
+                }
+
+                terminal
+                    .draw(|frame| render::draw(frame, app))
+                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+            }
+            RuntimeEvent::Terminal(crossterm::event::Event::Resize(_, _)) => {
+                terminal
+                    .draw(|frame| render::draw(frame, app))
+                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+            }
+            RuntimeEvent::ProgressDebounceElapsed => {
+                flush_pending_progress(&mut pending_progress, &mut save_progress)?;
+            }
+            RuntimeEvent::Terminal(_) => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn flush_pending_progress(
+    pending_progress: &mut Option<Progress>,
+    save_progress: &mut impl FnMut(Progress) -> Result<(), RuntimeError>,
+) -> Result<(), RuntimeError> {
+    if let Some(progress) = pending_progress.take() {
+        save_progress(progress)?;
+    }
+
+    Ok(())
 }
 
 fn run_terminal_event_loop_with_key_handler<B, E>(
@@ -188,7 +253,7 @@ where
 
     loop {
         match events.next_event()? {
-            crossterm::event::Event::Key(key) => {
+            RuntimeEvent::Terminal(crossterm::event::Event::Key(key)) => {
                 if handle_key_event(app, key)? {
                     break;
                 }
@@ -197,12 +262,12 @@ where
                     .draw(|frame| render::draw(frame, app))
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
             }
-            crossterm::event::Event::Resize(_, _) => {
+            RuntimeEvent::Terminal(crossterm::event::Event::Resize(_, _)) => {
                 terminal
                     .draw(|frame| render::draw(frame, app))
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
             }
-            _ => {}
+            RuntimeEvent::ProgressDebounceElapsed | RuntimeEvent::Terminal(_) => {}
         }
     }
 
@@ -223,20 +288,24 @@ mod tests {
     use crate::input::Focus;
     use crate::progress::Progress;
 
-    use super::{build_app, EventSource, RuntimeError};
+    use super::{build_app, EventSource, RuntimeError, RuntimeEvent};
 
     struct VecEventSource {
-        events: Vec<Event>,
+        events: Vec<RuntimeEvent>,
     }
 
     impl EventSource for VecEventSource {
-        fn next_event(&mut self) -> Result<Event, RuntimeError> {
+        fn next_event(&mut self) -> Result<RuntimeEvent, RuntimeError> {
             if self.events.is_empty() {
                 return Err(RuntimeError::new("no more events"));
             }
 
             Ok(self.events.remove(0))
         }
+    }
+
+    fn terminal_event(event: Event) -> RuntimeEvent {
+        RuntimeEvent::Terminal(event)
     }
 
     #[test]
@@ -482,9 +551,15 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut events = VecEventSource {
             events: vec![
-                Event::Resize(80, 24),
-                Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
-                Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+                terminal_event(Event::Resize(80, 24)),
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE,
+                ))),
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('q'),
+                    KeyModifiers::NONE,
+                ))),
             ],
         };
 
@@ -517,8 +592,133 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut events = VecEventSource {
             events: vec![
-                Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
-                Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE,
+                ))),
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('q'),
+                    KeyModifiers::NONE,
+                ))),
+            ],
+        };
+        let mut saved_progress = Vec::new();
+
+        super::run_terminal_event_loop_with_progress(
+            &mut terminal,
+            &mut app,
+            &mut events,
+            || "2026-06-04T12:00:00Z".to_string(),
+            |progress| {
+                saved_progress.push(progress);
+                Ok(())
+            },
+        )
+        .expect("run terminal event loop");
+
+        assert_eq!(
+            saved_progress,
+            vec![Progress {
+                block_index: 0,
+                sentence_offset: "First.".len(),
+                timestamp: "2026-06-04T12:00:00Z".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn terminal_event_loop_coalesces_consecutive_progress_saves() {
+        let mut app = build_app(
+            Path::new("/books/book.epub"),
+            |_| {
+                Ok(Document {
+                    blocks: vec![Block::Text(TextBlock {
+                        text: "First. Second. Third.".to_string(),
+                        chapter_index: 0,
+                        annotations: Vec::new(),
+                    })],
+                    toc: Vec::new(),
+                    annotations: HashMap::new(),
+                    chapter_ranges: Vec::new(),
+                })
+            },
+            |_| Ok(None),
+        )
+        .expect("build app");
+        let backend = TestBackend::new(40, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut events = VecEventSource {
+            events: vec![
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE,
+                ))),
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE,
+                ))),
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('q'),
+                    KeyModifiers::NONE,
+                ))),
+            ],
+        };
+        let mut saved_progress = Vec::new();
+
+        super::run_terminal_event_loop_with_progress(
+            &mut terminal,
+            &mut app,
+            &mut events,
+            || "2026-06-04T12:00:00Z".to_string(),
+            |progress| {
+                saved_progress.push(progress);
+                Ok(())
+            },
+        )
+        .expect("run terminal event loop");
+
+        assert_eq!(
+            saved_progress,
+            vec![Progress {
+                block_index: 0,
+                sentence_offset: "First. Second.".len(),
+                timestamp: "2026-06-04T12:00:00Z".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn terminal_event_loop_flushes_progress_after_debounce_timeout() {
+        let mut app = build_app(
+            Path::new("/books/book.epub"),
+            |_| {
+                Ok(Document {
+                    blocks: vec![Block::Text(TextBlock {
+                        text: "First. Second.".to_string(),
+                        chapter_index: 0,
+                        annotations: Vec::new(),
+                    })],
+                    toc: Vec::new(),
+                    annotations: HashMap::new(),
+                    chapter_ranges: Vec::new(),
+                })
+            },
+            |_| Ok(None),
+        )
+        .expect("build app");
+        let backend = TestBackend::new(40, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut events = VecEventSource {
+            events: vec![
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE,
+                ))),
+                RuntimeEvent::ProgressDebounceElapsed,
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('q'),
+                    KeyModifiers::NONE,
+                ))),
             ],
         };
         let mut saved_progress = Vec::new();
