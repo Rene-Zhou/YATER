@@ -4,6 +4,7 @@ pub mod document;
 pub mod epub;
 pub mod image;
 pub mod input;
+pub mod issue_log;
 pub mod progress;
 pub mod render;
 pub mod runtime;
