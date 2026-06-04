@@ -9,6 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph, Wrap};
 use ratatui_image::{Image as TerminalImage, Resize};
+use unicode_width::UnicodeWidthChar;
 
 pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     let area = frame.area();
@@ -339,7 +340,17 @@ fn wrapped_row_for_prefix(prefix: &str, width: u16) -> u16 {
             continue;
         }
 
-        column += 1;
+        let character_width = character.width().unwrap_or(0);
+        if character_width == 0 {
+            continue;
+        }
+
+        if column + character_width > width {
+            row += 1;
+            column = 0;
+        }
+
+        column += character_width;
         if column >= width {
             row += 1;
             column = 0;
@@ -413,7 +424,7 @@ mod tests {
     };
     use crate::input::Action;
 
-    use super::draw;
+    use super::{draw, wrapped_row_for_prefix};
 
     #[test]
     fn renders_top_bar_and_current_sentence() {
@@ -651,6 +662,12 @@ mod tests {
             .expect("overlay bottom border row");
 
         assert_eq!(overlay_bottom_row + 1, highlighted_row);
+    }
+
+    #[test]
+    fn wrapped_row_for_prefix_counts_cjk_display_width() {
+        assert_eq!(wrapped_row_for_prefix("你好你好", 4), 2);
+        assert_eq!(wrapped_row_for_prefix("a你好", 2), 3);
     }
 
     #[test]
