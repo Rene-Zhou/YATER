@@ -159,9 +159,11 @@ impl App {
             Action::ExpandOrJumpToc => self.activate_selected_toc_item(),
             Action::CollapseOrParentToc => self.collapse_or_select_parent_toc_item(),
             Action::OpenAnnotationOverlay => {
-                self.focus = Focus::AnnotationOverlay;
-                self.selected_annotation_index = 0;
-                self.annotation_scroll = 0;
+                if self.current_sentence_annotation_count() > 0 {
+                    self.focus = Focus::AnnotationOverlay;
+                    self.selected_annotation_index = 0;
+                    self.annotation_scroll = 0;
+                }
             }
             Action::CycleAnnotation => self.cycle_annotation(),
             Action::ImmerseAnnotation => {
@@ -784,9 +786,9 @@ mod tests {
     #[test]
     fn focus_transitions_follow_reader_toc_and_annotation_actions() {
         let mut app = App::new(Document {
-            blocks: vec![text_block("First.")],
+            blocks: vec![annotated_text_block("First [1].", "note-1", "First ".len())],
             toc: Vec::new(),
-            annotations: HashMap::new(),
+            annotations: annotation_map("note-1", "Note."),
             chapter_ranges: Vec::new(),
         });
 
@@ -808,6 +810,20 @@ mod tests {
         assert_eq!(app.focus(), Focus::AnnotationOverlay);
 
         app.apply(Action::CloseAnnotationOverlay);
+        assert_eq!(app.focus(), Focus::Content);
+    }
+
+    #[test]
+    fn annotation_overlay_only_opens_when_current_sentence_has_annotation() {
+        let mut app = App::new(Document {
+            blocks: vec![text_block("First.")],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+
+        app.apply(Action::OpenAnnotationOverlay);
+
         assert_eq!(app.focus(), Focus::Content);
     }
 
@@ -972,9 +988,16 @@ mod tests {
     #[test]
     fn immersed_annotation_scrolls_and_resets_with_overlay() {
         let mut app = App::new(Document {
-            blocks: vec![text_block("Text with note.")],
+            blocks: vec![annotated_text_block(
+                "Text with [1].",
+                "note-1",
+                "Text with ".len(),
+            )],
             toc: Vec::new(),
-            annotations: HashMap::new(),
+            annotations: annotation_map(
+                "note-1",
+                "Top note line\nSecond note line\nThird note line",
+            ),
             chapter_ranges: Vec::new(),
         });
 
@@ -1003,6 +1026,23 @@ mod tests {
             chapter_index: 0,
             annotations: Vec::new(),
         })
+    }
+
+    fn annotated_text_block(text: &str, id: &str, offset: usize) -> Block {
+        Block::Text(TextBlock {
+            text: text.to_string(),
+            chapter_index: 0,
+            annotations: vec![AnnotationRef {
+                id: id.to_string(),
+                offset,
+            }],
+        })
+    }
+
+    fn annotation_map(id: &str, note: &str) -> HashMap<String, String> {
+        let mut annotations = HashMap::new();
+        annotations.insert(id.to_string(), note.to_string());
+        annotations
     }
 
     fn image_block() -> Block {
