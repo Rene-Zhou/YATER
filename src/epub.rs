@@ -154,7 +154,13 @@ fn load_image_data(
         };
 
         match read_zip_bytes(archive, &source_path) {
-            Ok(data) => image.data = Some(data),
+            Ok(data) => {
+                if let Err(error) = ::image::load_from_memory(&data) {
+                    log_issue(&format!("bad image: {source_path}: {error}"));
+                } else {
+                    image.data = Some(data);
+                }
+            }
             Err(error) => log_issue(&format!("bad image: {source_path}: {error}")),
         }
     }
@@ -519,6 +525,7 @@ fn normalize_zip_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::io::Cursor;
     use std::io::Write;
     use std::path::Path;
 
@@ -682,7 +689,7 @@ mod tests {
             Block::Image(block)
                 if block.alt_text.as_deref() == Some("Picture")
                     && block.source_path.as_deref() == Some("OEBPS/images/picture.png")
-                    && block.data.as_deref() == Some(&[1, 2, 3][..])
+                    && block.data.as_deref() == Some(test_png_bytes().as_slice())
         ));
         assert!(matches!(
             &document.blocks[2],
@@ -714,7 +721,7 @@ mod tests {
     </nav>
   </body>
 </html>"#,
-            Some(("OEBPS/images/picture.png", &[1, 2, 3])),
+            Some(("OEBPS/images/picture.png", test_png_bytes().as_slice())),
         );
 
         let document = open(&epub_path).expect("parse EPUB");
@@ -723,7 +730,7 @@ mod tests {
             &document.blocks[0],
             Block::Image(block)
                 if block.source_path.as_deref() == Some("OEBPS/images/picture.png")
-                    && block.data.as_deref() == Some(&[1, 2, 3][..])
+                    && block.data.as_deref() == Some(test_png_bytes().as_slice())
         ));
     }
 
@@ -787,6 +794,38 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_image_data_is_logged_non_fatally() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p><img src="images/corrupt.png" alt="Corrupt"/></p>
+  </body>
+</html>"#,
+            Some(("OEBPS/images/corrupt.png", &[1, 2, 3])),
+        );
+        let mut issues = Vec::new();
+
+        let document = super::open_with_issue_logger(&epub_path, |issue| {
+            issues.push(issue.to_string());
+        })
+        .expect("parse EPUB");
+
+        assert!(matches!(
+            &document.blocks[0],
+            Block::Image(block)
+                if block.alt_text.as_deref() == Some("Corrupt")
+                    && block.source_path.as_deref() == Some("OEBPS/images/corrupt.png")
+                    && block.data.is_none()
+        ));
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("bad image: OEBPS/images/corrupt.png"));
+    }
+
+    #[test]
     fn parses_nested_nav_toc_tree() {
         let tempdir = tempdir().expect("temp dir");
         let epub_path = tempdir.path().join("book.epub");
@@ -839,10 +878,11 @@ mod tests {
     }
 
     fn write_minimal_epub(path: &Path, chapter_xhtml: &str) {
+        let image = test_png_bytes();
         write_epub(
             path,
             chapter_xhtml,
-            Some(("OEBPS/images/picture.png", &[1, 2, 3])),
+            Some(("OEBPS/images/picture.png", image.as_slice())),
         );
     }
 
@@ -958,5 +998,14 @@ mod tests {
     ) {
         writer.start_file(name, options).expect("start zip file");
         writer.write_all(contents).expect("write zip file");
+    }
+
+    fn test_png_bytes() -> Vec<u8> {
+        let image = ::image::RgbaImage::from_fn(1, 1, |_, _| ::image::Rgba([0, 0, 0, 255]));
+        let mut bytes = Cursor::new(Vec::new());
+        ::image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, ::image::ImageFormat::Png)
+            .expect("encode png");
+        bytes.into_inner()
     }
 }
