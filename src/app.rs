@@ -191,7 +191,7 @@ impl App {
                 self.annotation_scroll = 0;
             }
             Action::ExitAnnotationImmersion => {
-                self.focus = Focus::AnnotationOverlay;
+                self.focus = Focus::Content;
                 self.annotation_scroll = 0;
             }
             Action::CloseAnnotationOverlay => {
@@ -880,9 +880,6 @@ mod tests {
         assert_eq!(app.focus(), Focus::AnnotationImmersed);
 
         app.apply(Action::ExitAnnotationImmersion);
-        assert_eq!(app.focus(), Focus::AnnotationOverlay);
-
-        app.apply(Action::CloseAnnotationOverlay);
         assert_eq!(app.focus(), Focus::Content);
     }
 
