@@ -49,22 +49,9 @@ pub fn build_app_with_image_mode(
     let document = load_document(file)?;
     let progress = load_progress(file)?;
 
-    let position = progress
-        .filter(|progress| progress.block_index < document.blocks.len())
-        .map(|progress| crate::app::ReadingPosition {
-            block_index: progress.block_index,
-            sentence_offset: progress.sentence_offset,
-        })
-        .unwrap_or(crate::app::ReadingPosition {
-            block_index: 0,
-            sentence_offset: 0,
-        });
-
-    Ok(App::with_position_and_image_mode(
-        document,
-        position,
-        image_mode,
-    ))
+    let mut app = App::with_restored_progress(document, progress);
+    app.set_image_mode(image_mode);
+    Ok(app)
 }
 
 pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
@@ -336,6 +323,36 @@ mod tests {
 
         assert_eq!(app.position().block_index, 0);
         assert_eq!(app.position().sentence_offset, "First.".len());
+    }
+
+    #[test]
+    fn build_app_ignores_stale_restored_sentence_offset() {
+        let app = build_app(
+            Path::new("/books/book.epub"),
+            |_| {
+                Ok(Document {
+                    blocks: vec![Block::Text(TextBlock {
+                        text: "First. Second.".to_string(),
+                        chapter_index: 0,
+                        annotations: Vec::new(),
+                    })],
+                    toc: Vec::new(),
+                    annotations: HashMap::new(),
+                    chapter_ranges: Vec::new(),
+                })
+            },
+            |_| {
+                Ok(Some(Progress {
+                    block_index: 0,
+                    sentence_offset: 1,
+                    timestamp: "2026-06-03T12:00:00Z".to_string(),
+                }))
+            },
+        )
+        .expect("build app");
+
+        assert_eq!(app.position().block_index, 0);
+        assert_eq!(app.position().sentence_offset, 0);
     }
 
     #[test]
