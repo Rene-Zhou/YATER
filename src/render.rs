@@ -88,6 +88,14 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
                 {
                     vec![Line::from(format!("[image unavailable: {label}]"))]
                 }
+                SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel
+                    if image
+                        .data
+                        .as_deref()
+                        .is_some_and(|data| ::image::load_from_memory(data).is_err()) =>
+                {
+                    vec![Line::from(format!("[image unavailable: {label}]"))]
+                }
                 SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel => {
                     vec![Line::from(format!("[image: {label}]"))]
                 }
@@ -761,6 +769,29 @@ mod tests {
             chapter_ranges: Vec::new(),
         };
         let app = App::new(document);
+        let backend = TestBackend::new(50, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("[image unavailable: Map of routes]"));
+    }
+
+    #[test]
+    fn renders_unavailable_placeholder_when_bitmap_image_data_is_invalid() {
+        let document = Document {
+            blocks: vec![Block::Image(ImageBlock {
+                alt_text: Some("Map of routes".to_string()),
+                source_path: Some("OEBPS/images/map.png".to_string()),
+                data: Some(vec![1, 2, 3]),
+                chapter_index: 0,
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::with_image_mode(document, crate::image::SelectedImageMode::Sixel);
         let backend = TestBackend::new(50, 8);
         let mut terminal = Terminal::new(backend).expect("terminal");
 
