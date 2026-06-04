@@ -141,8 +141,8 @@ impl App {
         match action {
             Action::NextSentence => self.next_sentence(),
             Action::PreviousSentence => self.previous_sentence(),
-            Action::NextParagraph => self.advance_to_next_text_block(),
-            Action::PreviousParagraph => self.retreat_to_previous_text_block(),
+            Action::NextParagraph => self.advance_to_next_reading_block(),
+            Action::PreviousParagraph => self.retreat_to_previous_reading_block(),
             Action::PageDown => self.page_down(),
             Action::PageUp => self.page_up(),
             Action::JumpToChapterStart => self.jump_to_chapter_start(),
@@ -186,7 +186,7 @@ impl App {
 
     fn next_sentence(&mut self) {
         let Some(block) = self.document.text_block(self.position.block_index) else {
-            self.advance_to_next_text_block();
+            self.advance_to_next_reading_block();
             return;
         };
 
@@ -201,21 +201,13 @@ impl App {
         if let Some(next_range) = ranges.get(current_sentence_index + 1) {
             self.position.sentence_offset = next_range.0;
         } else {
-            self.advance_to_next_text_block();
+            self.advance_to_next_reading_block();
         }
     }
 
-    fn advance_to_next_text_block(&mut self) {
-        let next_block_index = self
-            .document
-            .blocks
-            .iter()
-            .enumerate()
-            .skip(self.position.block_index + 1)
-            .find_map(|(index, block)| match block {
-                Block::Text(_) => Some(index),
-                Block::Image(_) => None,
-            });
+    fn advance_to_next_reading_block(&mut self) {
+        let next_block_index = (self.position.block_index + 1 < self.document.blocks.len())
+            .then_some(self.position.block_index + 1);
 
         if let Some(block_index) = next_block_index {
             self.position = ReadingPosition {
@@ -227,7 +219,7 @@ impl App {
 
     fn previous_sentence(&mut self) {
         let Some(block) = self.document.text_block(self.position.block_index) else {
-            self.retreat_to_previous_text_block();
+            self.retreat_to_previous_reading_block();
             return;
         };
 
@@ -240,7 +232,7 @@ impl App {
         if current_sentence_index > 0 {
             self.position.sentence_offset = ranges[current_sentence_index - 1].0;
         } else {
-            self.retreat_to_previous_text_block();
+            self.retreat_to_previous_reading_block();
         }
     }
 
@@ -256,29 +248,21 @@ impl App {
         }
     }
 
-    fn retreat_to_previous_text_block(&mut self) {
-        let previous_text_block = self
-            .document
-            .blocks
-            .iter()
-            .enumerate()
-            .take(self.position.block_index)
-            .rev()
-            .find_map(|(index, block)| match block {
-                Block::Text(block) => Some((index, block)),
-                Block::Image(_) => None,
-            });
-
-        if let Some((block_index, block)) = previous_text_block {
-            let sentence_offset = segment_sentences(&block.text)
+    fn retreat_to_previous_reading_block(&mut self) {
+        let Some(block_index) = self.position.block_index.checked_sub(1) else {
+            return;
+        };
+        let sentence_offset = match &self.document.blocks[block_index] {
+            Block::Text(block) => segment_sentences(&block.text)
                 .last()
                 .map(|range| range.0)
-                .unwrap_or(0);
+                .unwrap_or(0),
+            Block::Image(_) => 0,
+        };
 
-            self.position = ReadingPosition {
-                block_index,
-                sentence_offset,
-            };
+        self.position = ReadingPosition {
+            block_index,
+            sentence_offset,
         }
     }
 
@@ -559,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn paragraph_navigation_moves_between_text_blocks_and_skips_images() {
+    fn paragraph_navigation_moves_between_reading_blocks() {
         let document = Document {
             blocks: vec![
                 text_block("First paragraph."),
@@ -576,6 +560,15 @@ mod tests {
         assert_eq!(
             app.position(),
             ReadingPosition {
+                block_index: 1,
+                sentence_offset: 0
+            }
+        );
+
+        app.apply(Action::NextParagraph);
+        assert_eq!(
+            app.position(),
+            ReadingPosition {
                 block_index: 2,
                 sentence_offset: 0
             }
@@ -585,7 +578,54 @@ mod tests {
         assert_eq!(
             app.position(),
             ReadingPosition {
+                block_index: 1,
+                sentence_offset: 0
+            }
+        );
+
+        app.apply(Action::PreviousParagraph);
+        assert_eq!(
+            app.position(),
+            ReadingPosition {
                 block_index: 0,
+                sentence_offset: 0
+            }
+        );
+    }
+
+    #[test]
+    fn sentence_navigation_visits_inline_image_blocks() {
+        let document = Document {
+            blocks: vec![text_block("Before."), image_block(), text_block("After.")],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let mut app = App::new(document);
+
+        app.apply(Action::NextSentence);
+        assert_eq!(
+            app.position(),
+            ReadingPosition {
+                block_index: 1,
+                sentence_offset: 0
+            }
+        );
+
+        app.apply(Action::NextSentence);
+        assert_eq!(
+            app.position(),
+            ReadingPosition {
+                block_index: 2,
+                sentence_offset: 0
+            }
+        );
+
+        app.apply(Action::PreviousSentence);
+        assert_eq!(
+            app.position(),
+            ReadingPosition {
+                block_index: 1,
                 sentence_offset: 0
             }
         );
