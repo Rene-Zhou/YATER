@@ -8,6 +8,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
+use ratatui_image::picker::ProtocolType;
+use ratatui_image::{Image as TerminalImage, Resize};
 
 pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     let area = frame.area();
@@ -28,7 +30,9 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         .unwrap_or("");
     frame.render_widget(Paragraph::new(chapter_title).centered(), top_bar);
 
-    frame.render_widget(Paragraph::new(current_content_lines(app, content)), content);
+    if !draw_current_image(frame, content, app) {
+        frame.render_widget(Paragraph::new(current_content_lines(app, content)), content);
+    }
 
     if app.focus() == Focus::Toc {
         draw_toc(frame, content, app);
@@ -95,6 +99,33 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
         }
         None => vec![Line::default()],
     }
+}
+
+fn draw_current_image(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) -> bool {
+    let document = app.document();
+    let position = app.position();
+    let Some(Block::Image(image)) = document.blocks.get(position.block_index) else {
+        return false;
+    };
+    if app.image_mode() != SelectedImageMode::Sixel {
+        return false;
+    }
+    let Some(data) = image.data.as_deref() else {
+        return false;
+    };
+
+    let Ok(decoded_image) = ::image::load_from_memory(data) else {
+        return false;
+    };
+    let mut picker = ratatui_image::picker::Picker::halfblocks();
+    picker.set_protocol_type(ProtocolType::Sixel);
+    let Ok(protocol) = picker.new_protocol(decoded_image, content.as_size(), Resize::Fit(None))
+    else {
+        return false;
+    };
+
+    frame.render_widget(TerminalImage::new(&protocol).allow_clipping(true), content);
+    true
 }
 
 fn render_halfblock_image(
@@ -673,6 +704,30 @@ mod tests {
 
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("▀▀"));
+        assert!(!rendered.contains("[image: Map of routes]"));
+    }
+
+    #[test]
+    fn renders_sixel_image_when_data_is_loaded() {
+        let document = Document {
+            blocks: vec![Block::Image(ImageBlock {
+                alt_text: Some("Map of routes".to_string()),
+                source_path: Some("OEBPS/images/map.png".to_string()),
+                data: Some(test_png_bytes()),
+                chapter_index: 0,
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::with_image_mode(document, crate::image::SelectedImageMode::Sixel);
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("\u{1b}P"));
         assert!(!rendered.contains("[image: Map of routes]"));
     }
 
