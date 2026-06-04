@@ -61,7 +61,7 @@ impl Document {
     pub fn chapter_title_for_block(&self, block_index: usize) -> Option<&str> {
         self.toc
             .iter()
-            .filter(|node| node.target_block_index <= block_index)
+            .filter_map(|node| best_toc_node_for_block(node, block_index))
             .max_by_key(|node| node.target_block_index)
             .map(|node| node.title.as_str())
     }
@@ -76,6 +76,22 @@ impl Document {
     pub fn annotation_text(&self, id: &str) -> Option<&str> {
         self.annotations.get(id).map(String::as_str)
     }
+}
+
+fn best_toc_node_for_block(node: &TocNode, block_index: usize) -> Option<&TocNode> {
+    if node.target_block_index > block_index {
+        return None;
+    }
+
+    let child = node
+        .children
+        .iter()
+        .filter_map(|child| best_toc_node_for_block(child, block_index))
+        .max_by_key(|child| child.target_block_index);
+
+    child
+        .filter(|child| child.target_block_index > node.target_block_index)
+        .or(Some(node))
 }
 
 #[cfg(test)]
@@ -151,6 +167,30 @@ mod tests {
                 end_block: 2,
             })
         );
+    }
+
+    #[test]
+    fn finds_nested_toc_title_for_block() {
+        let document = Document {
+            blocks: vec![
+                text_block("chapter start", 0),
+                text_block("section start", 0),
+                text_block("section continuation", 0),
+            ],
+            toc: vec![TocNode {
+                title: "Chapter One".to_string(),
+                target_block_index: 0,
+                children: vec![TocNode {
+                    title: "Section One".to_string(),
+                    target_block_index: 1,
+                    children: Vec::new(),
+                }],
+            }],
+            annotations: AnnotationStore::new(),
+            chapter_ranges: Vec::new(),
+        };
+
+        assert_eq!(document.chapter_title_for_block(2), Some("Section One"));
     }
 
     fn text_block(text: &str, chapter_index: usize) -> Block {
