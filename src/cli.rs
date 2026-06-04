@@ -5,6 +5,8 @@ use clap::{Parser, ValueEnum};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageMode {
     Auto,
+    Kitty,
+    Iterm2,
     Sixel,
     Halfblock,
     Off,
@@ -12,6 +14,8 @@ pub enum ImageMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum ImageModeOverride {
+    Kitty,
+    Iterm2,
     Sixel,
     Halfblock,
     Off,
@@ -46,6 +50,8 @@ where
 impl From<ImageModeOverride> for ImageMode {
     fn from(mode: ImageModeOverride) -> Self {
         match mode {
+            ImageModeOverride::Kitty => Self::Kitty,
+            ImageModeOverride::Iterm2 => Self::Iterm2,
             ImageModeOverride::Sixel => Self::Sixel,
             ImageModeOverride::Halfblock => Self::Halfblock,
             ImageModeOverride::Off => Self::Off,
@@ -77,6 +83,8 @@ mod tests {
     #[test]
     fn parses_all_documented_image_modes() {
         let cases = [
+            ("kitty", ImageMode::Kitty),
+            ("iterm2", ImageMode::Iterm2),
             ("sixel", ImageMode::Sixel),
             ("halfblock", ImageMode::Halfblock),
             ("off", ImageMode::Off),

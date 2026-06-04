@@ -1,7 +1,10 @@
 use crate::cli::ImageMode;
+use ratatui_image::picker::ProtocolType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageModeSupport {
+    pub kitty: bool,
+    pub iterm2: bool,
     pub sixel: bool,
     pub halfblock: bool,
 }
@@ -9,6 +12,8 @@ pub struct ImageModeSupport {
 impl ImageModeSupport {
     pub fn terminal_default() -> Self {
         Self {
+            kitty: false,
+            iterm2: false,
             sixel: false,
             halfblock: true,
         }
@@ -17,33 +22,66 @@ impl ImageModeSupport {
     pub fn from_ratatui_capabilities<'a>(
         capabilities: impl IntoIterator<Item = &'a ratatui_image::picker::Capability>,
     ) -> Self {
+        let capabilities = capabilities.into_iter().collect::<Vec<_>>();
         Self {
+            kitty: capabilities
+                .iter()
+                .any(|capability| matches!(capability, ratatui_image::picker::Capability::Kitty)),
+            iterm2: false,
             sixel: capabilities
-                .into_iter()
+                .iter()
                 .any(|capability| matches!(capability, ratatui_image::picker::Capability::Sixel)),
             halfblock: true,
         }
     }
 
+    fn from_picker(picker: &ratatui_image::picker::Picker) -> Self {
+        let mut support = Self::from_ratatui_capabilities(picker.capabilities());
+        match picker.protocol_type() {
+            ProtocolType::Kitty => support.kitty = true,
+            ProtocolType::Iterm2 => support.iterm2 = true,
+            ProtocolType::Sixel => support.sixel = true,
+            ProtocolType::Halfblocks => {}
+        }
+        support
+    }
+
     pub fn detect_terminal() -> Self {
         ratatui_image::picker::Picker::from_query_stdio()
-            .map(|picker| Self::from_ratatui_capabilities(picker.capabilities()))
+            .map(|picker| Self::from_picker(&picker))
             .unwrap_or_else(|_| Self::terminal_default())
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectedImageMode {
+    Kitty,
+    Iterm2,
     Sixel,
     Halfblock,
     Off,
 }
 
+impl SelectedImageMode {
+    pub fn protocol_type(self) -> Option<ProtocolType> {
+        match self {
+            Self::Kitty => Some(ProtocolType::Kitty),
+            Self::Iterm2 => Some(ProtocolType::Iterm2),
+            Self::Sixel => Some(ProtocolType::Sixel),
+            Self::Halfblock | Self::Off => None,
+        }
+    }
+}
+
 pub fn select_image_mode(mode: ImageMode, support: ImageModeSupport) -> SelectedImageMode {
     match mode {
+        ImageMode::Kitty => SelectedImageMode::Kitty,
+        ImageMode::Iterm2 => SelectedImageMode::Iterm2,
         ImageMode::Sixel => SelectedImageMode::Sixel,
         ImageMode::Halfblock => SelectedImageMode::Halfblock,
         ImageMode::Off => SelectedImageMode::Off,
+        ImageMode::Auto if support.kitty => SelectedImageMode::Kitty,
+        ImageMode::Auto if support.iterm2 => SelectedImageMode::Iterm2,
         ImageMode::Auto if support.sixel => SelectedImageMode::Sixel,
         ImageMode::Auto if support.halfblock => SelectedImageMode::Halfblock,
         ImageMode::Auto => SelectedImageMode::Off,
@@ -61,6 +99,8 @@ mod tests {
         let selected = select_image_mode(
             ImageMode::Auto,
             ImageModeSupport {
+                kitty: false,
+                iterm2: false,
                 sixel: true,
                 halfblock: true,
             },
@@ -74,6 +114,8 @@ mod tests {
         let selected = select_image_mode(
             ImageMode::Auto,
             ImageModeSupport {
+                kitty: false,
+                iterm2: false,
                 sixel: false,
                 halfblock: true,
             },
@@ -87,12 +129,29 @@ mod tests {
         let selected = select_image_mode(
             ImageMode::Off,
             ImageModeSupport {
+                kitty: true,
+                iterm2: true,
                 sixel: true,
                 halfblock: true,
             },
         );
 
         assert_eq!(selected, SelectedImageMode::Off);
+    }
+
+    #[test]
+    fn auto_prefers_kitty_when_supported() {
+        let selected = select_image_mode(
+            ImageMode::Auto,
+            ImageModeSupport {
+                kitty: true,
+                iterm2: false,
+                sixel: true,
+                halfblock: true,
+            },
+        );
+
+        assert_eq!(selected, SelectedImageMode::Kitty);
     }
 
     #[test]
@@ -103,6 +162,17 @@ mod tests {
         assert_eq!(
             select_image_mode(ImageMode::Auto, support),
             SelectedImageMode::Sixel
+        );
+    }
+
+    #[test]
+    fn ratatui_kitty_capability_enables_kitty_auto_mode() {
+        let capabilities = [ratatui_image::picker::Capability::Kitty];
+        let support = ImageModeSupport::from_ratatui_capabilities(&capabilities);
+
+        assert_eq!(
+            select_image_mode(ImageMode::Auto, support),
+            SelectedImageMode::Kitty
         );
     }
 }

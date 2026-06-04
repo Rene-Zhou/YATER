@@ -8,7 +8,6 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
-use ratatui_image::picker::ProtocolType;
 use ratatui_image::{Image as TerminalImage, Resize};
 
 pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
@@ -81,10 +80,14 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
             let label = image.alt_text.as_deref().unwrap_or("untitled");
             match app.image_mode() {
                 SelectedImageMode::Off => vec![Line::from(format!("[image disabled: {label}]"))],
-                SelectedImageMode::Sixel if image.data.is_none() && image.source_path.is_some() => {
+                SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel
+                    if image.data.is_none() && image.source_path.is_some() =>
+                {
                     vec![Line::from(format!("[image unavailable: {label}]"))]
                 }
-                SelectedImageMode::Sixel => vec![Line::from(format!("[image: {label}]"))],
+                SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel => {
+                    vec![Line::from(format!("[image: {label}]"))]
+                }
                 SelectedImageMode::Halfblock => {
                     match image.data.as_deref() {
                         Some(data) => render_halfblock_image(data, content.width, content.height)
@@ -107,9 +110,9 @@ fn draw_current_image(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) 
     let Some(Block::Image(image)) = document.blocks.get(position.block_index) else {
         return false;
     };
-    if app.image_mode() != SelectedImageMode::Sixel {
+    let Some(protocol_type) = app.image_mode().protocol_type() else {
         return false;
-    }
+    };
     let Some(data) = image.data.as_deref() else {
         return false;
     };
@@ -118,7 +121,7 @@ fn draw_current_image(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) 
         return false;
     };
     let mut picker = ratatui_image::picker::Picker::halfblocks();
-    picker.set_protocol_type(ProtocolType::Sixel);
+    picker.set_protocol_type(protocol_type);
     let Ok(protocol) = picker.new_protocol(decoded_image, content.as_size(), Resize::Fit(None))
     else {
         return false;
