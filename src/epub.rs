@@ -107,7 +107,13 @@ pub fn open_with_issue_logger(
     let toc = if let Some(nav_item) = package.nav_item() {
         let nav_path = join_zip_path(&opf_base, &nav_item.href);
         let nav_xml = read_zip_text(&mut archive, &nav_path)?;
-        parse_toc(&nav_xml, &opf_base, &target_blocks_by_href)?
+        match parse_toc(&nav_xml, &opf_base, &target_blocks_by_href) {
+            Ok(toc) => toc,
+            Err(error) => {
+                log_issue(&format!("malformed HTML: {nav_path}: {error}"));
+                Vec::new()
+            }
+        }
     } else {
         Vec::new()
     };
@@ -890,6 +896,42 @@ mod tests {
         ));
         assert_eq!(issues.len(), 1);
         assert!(issues[0].contains("malformed HTML: OEBPS/chapter1.xhtml"));
+    }
+
+    #[test]
+    fn malformed_nav_is_logged_and_ignored_non_fatally() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><p>Readable chapter.</p></body>
+</html>"#,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><nav><ol><li>Broken
+</html>"#,
+            None,
+        );
+        let mut issues = Vec::new();
+
+        let document = super::open_with_issue_logger(&epub_path, |issue| {
+            issues.push(issue.to_string());
+        })
+        .expect("parse EPUB without TOC");
+
+        assert!(matches!(
+            &document.blocks[0],
+            Block::Text(block) if block.text == "Readable chapter."
+        ));
+        assert!(document.toc.is_empty());
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("malformed HTML: OEBPS/nav.xhtml"));
     }
 
     #[test]
