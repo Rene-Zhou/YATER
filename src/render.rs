@@ -168,7 +168,17 @@ fn draw_toc(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) {
     }
 
     frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(rows), area);
+    let scroll = toc_scroll_offset(app.selected_toc_row(), area.height);
+    frame.render_widget(Paragraph::new(rows).scroll((scroll, 0)), area);
+}
+
+fn toc_scroll_offset(selected_row: usize, visible_height: u16) -> u16 {
+    let visible_height = visible_height as usize;
+    if visible_height == 0 || selected_row < visible_height {
+        0
+    } else {
+        (selected_row + 1 - visible_height) as u16
+    }
 }
 
 fn append_toc_rows<'a>(
@@ -413,6 +423,27 @@ mod tests {
         assert!(row_with_text_has_modifier(
             terminal.backend().buffer(),
             "Section One",
+            Modifier::REVERSED,
+        ));
+    }
+
+    #[test]
+    fn scrolls_toc_sidebar_to_selected_row() {
+        let mut app = App::new(long_toc_document());
+        app.apply(Action::OpenToc);
+        for _ in 0..6 {
+            app.apply(Action::NextTocItem);
+        }
+        let backend = TestBackend::new(60, 4);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("Section Six"));
+        assert!(row_with_text_has_modifier(
+            terminal.backend().buffer(),
+            "Section Six",
             Modifier::REVERSED,
         ));
     }
@@ -683,6 +714,41 @@ mod tests {
                     target_block_index: 0,
                     children: Vec::new(),
                 }],
+            }],
+            annotations: HashMap::new(),
+            chapter_ranges: vec![ChapterRange {
+                start_block: 0,
+                end_block: 0,
+            }],
+        }
+    }
+
+    fn long_toc_document() -> Document {
+        Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "First sentence.".to_string(),
+                chapter_index: 0,
+                annotations: Vec::new(),
+            })],
+            toc: vec![TocNode {
+                title: "Chapter One".to_string(),
+                target_block_index: 0,
+                children: [
+                    "Section One",
+                    "Section Two",
+                    "Section Three",
+                    "Section Four",
+                    "Section Five",
+                    "Section Six",
+                    "Section Seven",
+                ]
+                .into_iter()
+                .map(|title| TocNode {
+                    title: title.to_string(),
+                    target_block_index: 0,
+                    children: Vec::new(),
+                })
+                .collect(),
             }],
             annotations: HashMap::new(),
             chapter_ranges: vec![ChapterRange {
