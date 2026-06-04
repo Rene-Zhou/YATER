@@ -187,8 +187,12 @@ impl App {
             }
             Action::CycleAnnotation => self.cycle_annotation(),
             Action::ImmerseAnnotation => {
-                self.focus = Focus::AnnotationImmersed;
-                self.annotation_scroll = 0;
+                if self.focus == Focus::AnnotationOverlay
+                    && self.current_sentence_annotation_count() > 0
+                {
+                    self.focus = Focus::AnnotationImmersed;
+                    self.annotation_scroll = 0;
+                }
             }
             Action::ExitAnnotationImmersion => {
                 self.focus = Focus::Content;
@@ -893,6 +897,20 @@ mod tests {
         });
 
         app.apply(Action::OpenAnnotationOverlay);
+
+        assert_eq!(app.focus(), Focus::Content);
+    }
+
+    #[test]
+    fn annotation_immersion_only_enters_from_open_overlay() {
+        let mut app = App::new(Document {
+            blocks: vec![annotated_text_block("First [1].", "note-1", "First ".len())],
+            toc: Vec::new(),
+            annotations: annotation_map("note-1", "Note."),
+            chapter_ranges: Vec::new(),
+        });
+
+        app.apply(Action::ImmerseAnnotation);
 
         assert_eq!(app.focus(), Focus::Content);
     }
