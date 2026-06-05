@@ -406,6 +406,10 @@ fn has_annotation_ancestor(node: roxmltree::Node<'_, '_>) -> bool {
         .any(|ancestor| ancestor.is_element() && is_annotation_container(ancestor))
 }
 
+fn is_non_visible_element(node: roxmltree::Node<'_, '_>) -> bool {
+    matches!(node.tag_name().name(), "script" | "style")
+}
+
 fn node_text(node: roxmltree::Node<'_, '_>) -> String {
     let mut blocks = Vec::new();
     append_annotation_text_blocks(node, &mut blocks);
@@ -500,6 +504,10 @@ fn append_visible_blocks(
                 text.push_str(child_text);
             }
         } else if child.is_element() {
+            if is_non_visible_element(child) {
+                continue;
+            }
+
             if child.tag_name().name() == "br" {
                 text.push(EXPLICIT_LINE_BREAK);
                 continue;
@@ -821,6 +829,28 @@ mod tests {
         assert_eq!(
             document.text_block(0).map(|block| block.text.as_str()),
             Some("First formatted text.")
+        );
+    }
+
+    #[test]
+    fn ignores_non_visible_inline_content_in_text_blocks() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Visible <script>hidden()</script> text.</p>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.text_block(0).map(|block| block.text.as_str()),
+            Some("Visible text.")
         );
     }
 
