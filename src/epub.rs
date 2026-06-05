@@ -95,9 +95,11 @@ pub fn open_with_issue_logger(
         }
 
         let item_path = join_zip_path(&opf_base, &item.href);
-        let item_xml = read_zip_text(&mut archive, &item_path)?;
-        match parse_xhtml_annotations(&item_xml) {
-            Ok(item_annotations) => annotations.extend(item_annotations),
+        match read_zip_text(&mut archive, &item_path) {
+            Ok(item_xml) => match parse_xhtml_annotations(&item_xml) {
+                Ok(item_annotations) => annotations.extend(item_annotations),
+                Err(error) => log_issue(&format!("malformed HTML: {item_path}: {error}")),
+            },
             Err(error) => log_issue(&format!("malformed HTML: {item_path}: {error}")),
         }
     }
@@ -1031,6 +1033,48 @@ mod tests {
     }
 
     #[test]
+    fn missing_non_spine_annotation_files_are_logged_non_fatally() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_missing_extra_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Text with <a href="notes.xhtml#note-1">[1]</a>.</p>
+  </body>
+</html>"##,
+            )],
+            &[("notes", "notes.xhtml", "application/xhtml+xml")],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+        );
+        let mut issues = Vec::new();
+
+        let document = super::open_with_issue_logger(&epub_path, |issue| {
+            issues.push(issue.to_string());
+        })
+        .expect("parse EPUB");
+
+        assert_eq!(
+            document.text_block(0).map(|block| block.text.as_str()),
+            Some("Text with [1].")
+        );
+        assert_eq!(document.annotation_text("note-1"), None);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("malformed HTML: OEBPS/notes.xhtml"));
+    }
+
+    #[test]
     fn preserves_block_breaks_in_annotation_plain_text() {
         let tempdir = tempdir().expect("temp dir");
         let epub_path = tempdir.path().join("book.epub");
@@ -1498,23 +1542,59 @@ mod tests {
         nav_xhtml: &str,
         image_file: Option<(&str, &[u8])>,
     ) {
+        write_epub_with_extra_files_and_missing_extra_files(
+            path,
+            chapters,
+            extra_files,
+            &[],
+            nav_xhtml,
+            image_file,
+        );
+    }
+
+    fn write_epub_with_missing_extra_files(
+        path: &Path,
+        chapters: &[(&str, &str, &str)],
+        missing_extra_files: &[(&str, &str, &str)],
+        nav_xhtml: &str,
+    ) {
+        write_epub_with_extra_files_and_missing_extra_files(
+            path,
+            chapters,
+            &[],
+            missing_extra_files,
+            nav_xhtml,
+            None,
+        );
+    }
+
+    fn write_epub_with_extra_files_and_missing_extra_files(
+        path: &Path,
+        chapters: &[(&str, &str, &str)],
+        extra_files: &[(&str, &str, &str, &str)],
+        missing_extra_files: &[(&str, &str, &str)],
+        nav_xhtml: &str,
+        image_file: Option<(&str, &[u8])>,
+    ) {
         write_epub_with_optional_nav_file(
             path,
             chapters,
             extra_files,
+            missing_extra_files,
             Some(nav_xhtml),
             image_file,
         );
     }
 
     fn write_epub_without_nav_file(path: &Path, chapters: &[(&str, &str, &str)]) {
-        write_epub_with_optional_nav_file(path, chapters, &[], None, None);
+        write_epub_with_optional_nav_file(path, chapters, &[], &[], None, None);
     }
 
     fn write_epub_with_optional_nav_file(
         path: &Path,
         chapters: &[(&str, &str, &str)],
         extra_files: &[(&str, &str, &str, &str)],
+        missing_extra_files: &[(&str, &str, &str)],
         nav_xhtml: Option<&str>,
         image_file: Option<(&str, &[u8])>,
     ) {
@@ -1560,6 +1640,9 @@ mod tests {
                         r#"    <item id="{id}" href="{href}" media-type="application/xhtml+xml"/>"#
                     ))
                     .chain(extra_files.iter().map(|(id, href, media_type, _)| format!(
+                        r#"    <item id="{id}" href="{href}" media-type="{media_type}"/>"#
+                    )))
+                    .chain(missing_extra_files.iter().map(|(id, href, media_type)| format!(
                         r#"    <item id="{id}" href="{href}" media-type="{media_type}"/>"#
                     )))
                     .collect::<Vec<_>>()
