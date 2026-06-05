@@ -46,25 +46,23 @@ pub fn open_with_issue_logger(
             .get(idref)
             .ok_or_else(|| EpubError(format!("spine item not found in manifest: {idref}")))?;
         let chapter_path = join_zip_path(&opf_base, &item.href);
-        let chapter_xml = read_zip_text(&mut archive, &chapter_path)?;
         let start_block = blocks.len();
         let chapter_base = zip_parent(&chapter_path);
-        let mut parsed_chapter = match parse_xhtml_chapter(
-            &chapter_xml,
-            chapter_index,
-            &chapter_base,
-        ) {
-            Ok(chapter) => chapter,
+        let mut parsed_chapter = match read_zip_text(&mut archive, &chapter_path) {
+            Ok(chapter_xml) => match parse_xhtml_chapter(
+                &chapter_xml,
+                chapter_index,
+                &chapter_base,
+            ) {
+                Ok(chapter) => chapter,
+                Err(error) => {
+                    log_issue(&format!("malformed HTML: {chapter_path}: {error}"));
+                    malformed_chapter_placeholder(&chapter_path, chapter_index)
+                }
+            },
             Err(error) => {
                 log_issue(&format!("malformed HTML: {chapter_path}: {error}"));
-                ParsedChapter {
-                    blocks: vec![Block::Text(TextBlock {
-                        text: format!("[malformed chapter: {chapter_path}]"),
-                        chapter_index,
-                        annotations: Vec::new(),
-                    })],
-                    annotations: AnnotationStore::new(),
-                }
+                malformed_chapter_placeholder(&chapter_path, chapter_index)
             }
         };
         load_image_data(&mut archive, &mut parsed_chapter.blocks, &mut log_issue);
@@ -156,6 +154,17 @@ struct ParsedChapter {
 }
 
 const EXPLICIT_LINE_BREAK: char = '\u{0}';
+
+fn malformed_chapter_placeholder(chapter_path: &str, chapter_index: usize) -> ParsedChapter {
+    ParsedChapter {
+        blocks: vec![Block::Text(TextBlock {
+            text: format!("[malformed chapter: {chapter_path}]"),
+            chapter_index,
+            annotations: Vec::new(),
+        })],
+        annotations: AnnotationStore::new(),
+    }
+}
 
 fn read_zip_text(archive: &mut zip::ZipArchive<File>, name: &str) -> Result<String, EpubError> {
     let mut file = archive
@@ -1250,6 +1259,42 @@ mod tests {
     }
 
     #[test]
+    fn missing_chapter_is_logged_and_replaced_with_placeholder() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_missing_chapter_file(
+            &epub_path,
+            "chapter1",
+            "chapter1.xhtml",
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+        );
+        let mut issues = Vec::new();
+
+        let document = super::open_with_issue_logger(&epub_path, |issue| {
+            issues.push(issue.to_string());
+        })
+        .expect("parse EPUB with placeholder");
+
+        assert!(matches!(
+            &document.blocks[0],
+            Block::Text(block) if block.text == "[malformed chapter: OEBPS/chapter1.xhtml]"
+        ));
+        assert_eq!(document.chapter_range_for_block(0), Some(ChapterRange {
+            start_block: 0,
+            end_block: 0,
+        }));
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("malformed HTML: OEBPS/chapter1.xhtml"));
+    }
+
+    #[test]
     fn malformed_nav_is_logged_and_ignored_non_fatally() {
         let tempdir = tempdir().expect("temp dir");
         let epub_path = tempdir.path().join("book.epub");
@@ -1588,6 +1633,50 @@ mod tests {
 
     fn write_epub_without_nav_file(path: &Path, chapters: &[(&str, &str, &str)]) {
         write_epub_with_optional_nav_file(path, chapters, &[], &[], None, None);
+    }
+
+    fn write_epub_with_missing_chapter_file(
+        path: &Path,
+        chapter_id: &str,
+        chapter_href: &str,
+        nav_xhtml: &str,
+    ) {
+        let file = File::create(path).expect("create epub");
+        let mut writer = ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+
+        write_zip_file(&mut writer, options, "mimetype", "application/epub+zip");
+        write_zip_file(
+            &mut writer,
+            options,
+            "META-INF/container.xml",
+            r#"<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+        );
+        write_zip_file(
+            &mut writer,
+            options,
+            "OEBPS/content.opf",
+            &format!(
+                r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="{chapter_id}" href="{chapter_href}" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="{chapter_id}"/>
+  </spine>
+</package>"#
+            ),
+        );
+        write_zip_file(&mut writer, options, "OEBPS/nav.xhtml", nav_xhtml);
+
+        writer.finish().expect("finish epub");
     }
 
     fn write_epub_with_optional_nav_file(
