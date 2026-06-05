@@ -344,7 +344,7 @@ fn parse_toc_item(
     let href_without_fragment = href.split('#').next().unwrap_or(href);
     let target_path = join_zip_path(opf_base, href_without_fragment);
     let target_block_index = *target_blocks_by_href.get(&target_path)?;
-    let title = link.text().unwrap_or("").trim();
+    let title = normalized_descendant_text(link);
 
     if title.is_empty() {
         return None;
@@ -357,7 +357,7 @@ fn parse_toc_item(
         .unwrap_or_default();
 
     Some(TocNode {
-        title: title.to_string(),
+        title,
         target_block_index,
         children,
     })
@@ -1250,6 +1250,37 @@ mod tests {
         assert_eq!(document.toc.len(), 1);
         assert_eq!(document.toc[0].title, "Chapter One");
         assert_eq!(document.toc[0].target_block_index, 0);
+    }
+
+    #[test]
+    fn parses_toc_titles_with_inline_markup() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><h1>Chapter One</h1></body>
+</html>"#,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml"><span>Chapter</span> One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(document.toc.len(), 1);
+        assert_eq!(document.toc[0].title, "Chapter One");
     }
 
     fn write_minimal_epub(path: &Path, chapter_xhtml: &str) {
