@@ -296,14 +296,31 @@ fn parse_toc(
 ) -> Result<Vec<TocNode>, EpubError> {
     let document = roxmltree::Document::parse(nav_xml)
         .map_err(|error| EpubError(format!("invalid EPUB nav document: {error}")))?;
-    let Some(root_list) = document
+    let Some(toc_nav) = document
         .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "nav" && is_toc_nav(*node))
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(root_list) = toc_nav
+        .children()
         .find(|node| node.is_element() && node.tag_name().name() == "ol")
     else {
         return Ok(Vec::new());
     };
 
     Ok(parse_toc_list(root_list, opf_base, target_blocks_by_href))
+}
+
+fn is_toc_nav(node: roxmltree::Node<'_, '_>) -> bool {
+    node.attributes()
+        .find(|attribute| attribute.name() == "type")
+        .is_some_and(|attribute| {
+            attribute
+                .value()
+                .split_whitespace()
+                .any(|value| value == "toc")
+        })
 }
 
 fn parse_toc_list(
@@ -1074,6 +1091,41 @@ mod tests {
         assert_eq!(document.toc[0].children.len(), 1);
         assert_eq!(document.toc[0].children[0].title, "Section One");
         assert_eq!(document.toc[0].children[0].target_block_index, 1);
+    }
+
+    #[test]
+    fn parses_toc_nav_when_landmarks_precede_it() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><h1>Chapter One</h1></body>
+</html>"#,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="landmarks">
+      <ol><li><a href="cover.xhtml">Cover</a></li></ol>
+    </nav>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(document.toc.len(), 1);
+        assert_eq!(document.toc[0].title, "Chapter One");
+        assert_eq!(document.toc[0].target_block_index, 0);
     }
 
     fn write_minimal_epub(path: &Path, chapter_xhtml: &str) {
