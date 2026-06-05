@@ -369,6 +369,7 @@ fn is_text_block_element(name: &str) -> bool {
     matches!(
         name,
         "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "div" | "figure" | "blockquote"
+            | "li"
     )
 }
 
@@ -680,6 +681,38 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec!["First nested paragraph.", "Second nested paragraph."]
+        );
+    }
+
+    #[test]
+    fn extracts_list_items_as_text_blocks() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <ul>
+      <li>First item.</li>
+      <li>Second item.</li>
+    </ul>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document
+                .blocks
+                .iter()
+                .filter_map(|block| match block {
+                    Block::Text(block) => Some(block.text.as_str()),
+                    Block::Image(_) => None,
+                })
+                .collect::<Vec<_>>(),
+            vec!["First item.", "Second item."]
         );
     }
 
