@@ -96,12 +96,10 @@ pub fn open_with_issue_logger(
 
         let item_path = join_zip_path(&opf_base, &item.href);
         let item_xml = read_zip_text(&mut archive, &item_path)?;
-        let item_annotations = parse_xhtml_annotations(&item_xml).map_err(|error| {
-            EpubError(format!(
-                "invalid XHTML annotations: {item_path}: {error}"
-            ))
-        })?;
-        annotations.extend(item_annotations);
+        match parse_xhtml_annotations(&item_xml) {
+            Ok(item_annotations) => annotations.extend(item_annotations),
+            Err(error) => log_issue(&format!("malformed HTML: {item_path}: {error}")),
+        }
     }
 
     let toc = if let Some(nav_item) = package.nav_item() {
@@ -848,6 +846,57 @@ mod tests {
             document.annotation_text("note-1"),
             Some("Separate note text.")
         );
+    }
+
+    #[test]
+    fn malformed_non_spine_annotation_files_are_logged_non_fatally() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_extra_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Text with <a href="notes.xhtml#note-1">[1]</a>.</p>
+  </body>
+</html>"##,
+            )],
+            &[(
+                "notes",
+                "notes.xhtml",
+                "application/xhtml+xml",
+                r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><aside id="note-1"><p>Broken note.
+</html>"##,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+        let mut issues = Vec::new();
+
+        let document = super::open_with_issue_logger(&epub_path, |issue| {
+            issues.push(issue.to_string());
+        })
+        .expect("parse EPUB");
+
+        assert_eq!(
+            document.text_block(0).map(|block| block.text.as_str()),
+            Some("Text with [1].")
+        );
+        assert_eq!(document.annotation_text("note-1"), None);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("malformed HTML: OEBPS/notes.xhtml"));
     }
 
     #[test]
