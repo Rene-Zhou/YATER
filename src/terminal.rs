@@ -36,17 +36,23 @@ impl TerminalSessionBackend for CrosstermTerminalSession {
     }
 
     fn exit(&mut self) -> Result<(), TerminalError> {
-        let leave_result = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen
-        )
-        .map_err(|error| TerminalError::new(error.to_string()));
+        let mut stdout = std::io::stdout();
+        let leave_result = write_exit_commands(&mut stdout);
         let raw_mode_result =
             crossterm::terminal::disable_raw_mode()
                 .map_err(|error| TerminalError::new(error.to_string()));
 
         leave_result.and(raw_mode_result)
     }
+}
+
+fn write_exit_commands(mut writer: impl std::io::Write) -> Result<(), TerminalError> {
+    crossterm::execute!(
+        writer,
+        crossterm::terminal::LeaveAlternateScreen,
+        crossterm::cursor::Show
+    )
+    .map_err(|error| TerminalError::new(error.to_string()))
 }
 
 pub fn should_run_interactive(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
@@ -144,6 +150,17 @@ mod tests {
 
         assert_eq!(error.to_string(), "runtime panicked: render panic");
         assert_eq!(backend.events, vec!["enter", "exit"]);
+    }
+
+    #[test]
+    fn crossterm_exit_commands_leave_alternate_screen_and_show_cursor() {
+        let mut output = Vec::new();
+
+        super::write_exit_commands(&mut output).expect("write exit commands");
+
+        let output = String::from_utf8(output).expect("utf8 terminal commands");
+        assert!(output.contains("\u{1b}[?1049l"));
+        assert!(output.contains("\u{1b}[?25h"));
     }
 
     #[test]
