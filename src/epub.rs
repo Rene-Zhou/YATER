@@ -148,6 +148,8 @@ struct ParsedChapter {
     annotations: AnnotationStore,
 }
 
+const EXPLICIT_LINE_BREAK: char = '\u{0}';
+
 fn read_zip_text(archive: &mut zip::ZipArchive<File>, name: &str) -> Result<String, EpubError> {
     let mut file = archive
         .by_name(name)
@@ -499,7 +501,7 @@ fn append_visible_blocks(
             }
         } else if child.is_element() {
             if child.tag_name().name() == "br" {
-                text.push('\n');
+                text.push(EXPLICIT_LINE_BREAK);
                 continue;
             }
 
@@ -560,21 +562,11 @@ fn flush_text_block(
     text: &mut String,
     annotation_refs: &mut Vec<AnnotationRef>,
 ) {
-    let leading_whitespace = text.len() - text.trim_start().len();
-    let trimmed = text.trim().to_string();
+    let (normalized, annotations) = normalize_visible_text_and_annotations(text, annotation_refs);
 
-    if !trimmed.is_empty() {
-        let annotations = annotation_refs
-            .iter()
-            .filter(|annotation_ref| annotation_ref.offset >= leading_whitespace)
-            .map(|annotation_ref| AnnotationRef {
-                id: annotation_ref.id.clone(),
-                offset: annotation_ref.offset - leading_whitespace,
-            })
-            .collect();
-
+    if !normalized.is_empty() {
         blocks.push(Block::Text(TextBlock {
-            text: trimmed,
+            text: normalized,
             chapter_index,
             annotations,
         }));
@@ -582,6 +574,60 @@ fn flush_text_block(
 
     text.clear();
     annotation_refs.clear();
+}
+
+fn normalize_visible_text_and_annotations(
+    text: &str,
+    annotation_refs: &[AnnotationRef],
+) -> (String, Vec<AnnotationRef>) {
+    let mut normalized = String::new();
+    let mut pending_space = false;
+    let mut normalized_annotation_refs = Vec::new();
+    let mut refs_by_offset = annotation_refs.iter().collect::<Vec<_>>();
+    refs_by_offset.sort_by_key(|annotation_ref| annotation_ref.offset);
+    let mut next_ref = 0;
+
+    for (byte_index, character) in text.char_indices() {
+        while next_ref < refs_by_offset.len() && refs_by_offset[next_ref].offset <= byte_index {
+            let annotation_ref = refs_by_offset[next_ref];
+            normalized_annotation_refs.push(AnnotationRef {
+                id: annotation_ref.id.clone(),
+                offset: normalized_offset(&normalized, pending_space),
+            });
+            next_ref += 1;
+        }
+
+        if character == EXPLICIT_LINE_BREAK {
+            if !normalized.is_empty() && !normalized.ends_with('\n') {
+                normalized.push('\n');
+            }
+            pending_space = false;
+        } else if character.is_whitespace() {
+            pending_space = true;
+        } else {
+            if pending_space && !normalized.is_empty() && !normalized.ends_with('\n') {
+                normalized.push(' ');
+            }
+            normalized.push(character);
+            pending_space = false;
+        }
+    }
+
+    while next_ref < refs_by_offset.len() {
+        let annotation_ref = refs_by_offset[next_ref];
+        normalized_annotation_refs.push(AnnotationRef {
+            id: annotation_ref.id.clone(),
+            offset: normalized_offset(&normalized, pending_space),
+        });
+        next_ref += 1;
+    }
+
+    (normalized, normalized_annotation_refs)
+}
+
+fn normalized_offset(normalized: &str, pending_space: bool) -> usize {
+    normalized.len()
+        + usize::from(pending_space && !normalized.is_empty() && !normalized.ends_with('\n'))
 }
 
 fn zip_parent(path: &str) -> String {
@@ -750,6 +796,31 @@ mod tests {
         assert_eq!(
             document.text_block(0).map(|block| block.text.as_str()),
             Some("First line.\nSecond line.")
+        );
+    }
+
+    #[test]
+    fn strips_inline_formatting_and_source_whitespace_from_text_blocks() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>
+      First <em>formatted</em>
+      text.
+    </p>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.text_block(0).map(|block| block.text.as_str()),
+            Some("First formatted text.")
         );
     }
 
