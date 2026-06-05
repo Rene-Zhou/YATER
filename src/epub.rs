@@ -423,6 +423,10 @@ fn node_text(node: roxmltree::Node<'_, '_>) -> String {
 
 fn append_annotation_text_blocks(node: roxmltree::Node<'_, '_>, blocks: &mut Vec<String>) {
     for child in node.children().filter(|child| child.is_element()) {
+        if is_non_visible_element(child) {
+            continue;
+        }
+
         if is_text_block_element(child.tag_name().name()) {
             let mut nested_blocks = Vec::new();
             append_annotation_text_blocks(child, &mut nested_blocks);
@@ -459,6 +463,10 @@ fn append_descendant_text(node: roxmltree::Node<'_, '_>, text: &mut String) {
                 text.push_str(child_text);
             }
         } else if child.is_element() {
+            if is_non_visible_element(child) {
+                continue;
+            }
+
             if child.tag_name().name() == "br" {
                 text.push('\n');
             } else {
@@ -1065,6 +1073,31 @@ mod tests {
         assert_eq!(
             document.annotation_text("note-1"),
             Some("First note line.\nSecond note line.")
+        );
+    }
+
+    #[test]
+    fn ignores_non_visible_inline_content_in_annotation_plain_text() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Text with <a href="#note-1">[1]</a>.</p>
+    <aside id="note-1">
+      <p>Visible <script>hidden()</script> note.</p>
+    </aside>
+  </body>
+</html>"##,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.annotation_text("note-1"),
+            Some("Visible note.")
         );
     }
 
