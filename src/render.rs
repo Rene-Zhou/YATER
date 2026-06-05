@@ -55,30 +55,39 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
 
     match document.blocks.get(position.block_index) {
         Some(Block::Text(block)) => {
-            let mut spans = Vec::new();
+            let mut lines = vec![Vec::new()];
             let mut cursor = 0;
             for range in segment_sentences(&block.text) {
                 if cursor < range.0 {
-                    spans.push(Span::raw(block.text[cursor..range.0].to_string()));
+                    push_text_span_lines(
+                        &mut lines,
+                        block.text[cursor..range.0].to_string(),
+                        Style::default(),
+                    );
                 }
 
                 let sentence = block.text[range.0..range.1].to_string();
                 if range.0 == position.sentence_offset {
-                    spans.push(Span::styled(
+                    push_text_span_lines(
+                        &mut lines,
                         sentence,
                         Style::default().add_modifier(Modifier::REVERSED),
-                    ));
+                    );
                 } else {
-                    spans.push(Span::raw(sentence));
+                    push_text_span_lines(&mut lines, sentence, Style::default());
                 }
                 cursor = range.1;
             }
 
             if cursor < block.text.len() {
-                spans.push(Span::raw(block.text[cursor..].to_string()));
+                push_text_span_lines(
+                    &mut lines,
+                    block.text[cursor..].to_string(),
+                    Style::default(),
+                );
             }
 
-            vec![Line::from(spans)]
+            lines.into_iter().map(Line::from).collect()
         }
         Some(Block::Image(image)) => {
             let label = image.alt_text.as_deref().unwrap_or("untitled");
@@ -113,6 +122,22 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
             }
         }
         None => vec![Line::default()],
+    }
+}
+
+fn push_text_span_lines(lines: &mut Vec<Vec<Span<'static>>>, text: String, style: Style) {
+    let mut parts = text.split('\n').peekable();
+
+    while let Some(part) = parts.next() {
+        if !part.is_empty() {
+            if let Some(line) = lines.last_mut() {
+                line.push(Span::styled(part.to_string(), style));
+            }
+        }
+
+        if parts.peek().is_some() {
+            lines.push(Vec::new());
+        }
     }
 }
 
@@ -474,6 +499,29 @@ mod tests {
         assert!(rendered.contains("First sentence."));
         assert!(rendered.contains("Second sentence."));
         assert!(rendered.contains("Third sentence."));
+    }
+
+    #[test]
+    fn renders_text_block_line_breaks_on_separate_rows() {
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "First line.\nSecond line.".to_string(),
+                chapter_index: 0,
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(40, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rows = buffer_rows(terminal.backend().buffer());
+        assert!(rows.iter().any(|row| row.contains("First line.")));
+        assert!(rows.iter().any(|row| row.contains("Second line.")));
+        assert!(!rows.iter().any(|row| row.contains("First line.Second line.")));
     }
 
     #[test]
@@ -998,12 +1046,15 @@ mod tests {
     }
 
     fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer_rows(buffer).join("\n")
+    }
+
+    fn buffer_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
         buffer
             .content()
             .chunks(buffer.area.width as usize)
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
-            .join("\n")
     }
 
     fn row_with_text_has_modifier(
