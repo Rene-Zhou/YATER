@@ -104,9 +104,14 @@ pub fn open_with_issue_logger(
 
     let toc = if let Some(nav_item) = package.nav_item() {
         let nav_path = join_zip_path(&opf_base, &nav_item.href);
-        let nav_xml = read_zip_text(&mut archive, &nav_path)?;
-        match parse_toc(&nav_xml, &opf_base, &target_blocks_by_href) {
-            Ok(toc) => toc,
+        match read_zip_text(&mut archive, &nav_path) {
+            Ok(nav_xml) => match parse_toc(&nav_xml, &opf_base, &target_blocks_by_href) {
+                Ok(toc) => toc,
+                Err(error) => {
+                    log_issue(&format!("malformed HTML: {nav_path}: {error}"));
+                    Vec::new()
+                }
+            },
             Err(error) => {
                 log_issue(&format!("malformed HTML: {nav_path}: {error}"));
                 Vec::new()
@@ -1237,6 +1242,37 @@ mod tests {
     }
 
     #[test]
+    fn missing_nav_file_is_logged_and_ignored_non_fatally() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_without_nav_file(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><p>Readable chapter.</p></body>
+</html>"#,
+            )],
+        );
+        let mut issues = Vec::new();
+
+        let document = super::open_with_issue_logger(&epub_path, |issue| {
+            issues.push(issue.to_string());
+        })
+        .expect("parse EPUB without nav file");
+
+        assert!(matches!(
+            &document.blocks[0],
+            Block::Text(block) if block.text == "Readable chapter."
+        ));
+        assert!(document.toc.is_empty());
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("malformed HTML: OEBPS/nav.xhtml"));
+    }
+
+    #[test]
     fn missing_image_data_is_logged_non_fatally() {
         let tempdir = tempdir().expect("temp dir");
         let epub_path = tempdir.path().join("book.epub");
@@ -1462,6 +1498,26 @@ mod tests {
         nav_xhtml: &str,
         image_file: Option<(&str, &[u8])>,
     ) {
+        write_epub_with_optional_nav_file(
+            path,
+            chapters,
+            extra_files,
+            Some(nav_xhtml),
+            image_file,
+        );
+    }
+
+    fn write_epub_without_nav_file(path: &Path, chapters: &[(&str, &str, &str)]) {
+        write_epub_with_optional_nav_file(path, chapters, &[], None, None);
+    }
+
+    fn write_epub_with_optional_nav_file(
+        path: &Path,
+        chapters: &[(&str, &str, &str)],
+        extra_files: &[(&str, &str, &str, &str)],
+        nav_xhtml: Option<&str>,
+        image_file: Option<(&str, &[u8])>,
+    ) {
         let file = File::create(path).expect("create epub");
         let mut writer = ZipWriter::new(file);
         let options = SimpleFileOptions::default();
@@ -1515,7 +1571,9 @@ mod tests {
                     .join("\n"),
             ),
         );
-        write_zip_file(&mut writer, options, "OEBPS/nav.xhtml", nav_xhtml);
+        if let Some(nav_xhtml) = nav_xhtml {
+            write_zip_file(&mut writer, options, "OEBPS/nav.xhtml", nav_xhtml);
+        }
         for (_, href, chapter_xhtml) in chapters {
             write_zip_file(
                 &mut writer,
