@@ -448,15 +448,16 @@ impl App {
         let sentence_range = segment_sentences(&block.text)
             .into_iter()
             .find(|range| range.0 == self.position.sentence_offset)?;
-        let annotation_ref = block
+        let annotation_text = block
             .annotations
             .iter()
             .filter(|annotation_ref| {
                 sentence_range.0 <= annotation_ref.offset && annotation_ref.offset < sentence_range.1
             })
+            .filter_map(|annotation_ref| self.document.annotation_text(&annotation_ref.id))
             .nth(self.selected_annotation_index)?;
 
-        self.document.annotation_text(&annotation_ref.id)
+        Some(annotation_text)
     }
 
     fn current_sentence_annotation_count(&self) -> usize {
@@ -476,6 +477,7 @@ impl App {
             .filter(|annotation_ref| {
                 sentence_range.0 <= annotation_ref.offset && annotation_ref.offset < sentence_range.1
             })
+            .filter(|annotation_ref| self.document.annotation_text(&annotation_ref.id).is_some())
             .count()
     }
 }
@@ -891,6 +893,24 @@ mod tests {
     fn annotation_overlay_only_opens_when_current_sentence_has_annotation() {
         let mut app = App::new(Document {
             blocks: vec![text_block("First.")],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+
+        app.apply(Action::OpenAnnotationOverlay);
+
+        assert_eq!(app.focus(), Focus::Content);
+    }
+
+    #[test]
+    fn annotation_overlay_ignores_refs_without_note_text() {
+        let mut app = App::new(Document {
+            blocks: vec![annotated_text_block(
+                "Text with [1].",
+                "missing-note",
+                "Text with ".len(),
+            )],
             toc: Vec::new(),
             annotations: HashMap::new(),
             chapter_ranges: Vec::new(),

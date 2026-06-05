@@ -422,13 +422,18 @@ fn current_annotation(app: &App) -> Option<VisibleAnnotation> {
         .filter(|annotation_ref| {
             sentence_range.0 <= annotation_ref.offset && annotation_ref.offset < sentence_range.1
         })
+        .filter_map(|annotation_ref| {
+            document
+                .annotation_text(&annotation_ref.id)
+                .map(|text| (annotation_ref, text))
+        })
         .collect::<Vec<_>>();
     let total = annotation_refs.len();
     let index = app.selected_annotation_index().min(total.saturating_sub(1));
-    let annotation_ref = annotation_refs.get(index)?;
+    let (_, text) = annotation_refs.get(index)?;
 
-    document.annotation_text(&annotation_ref.id).map(|text| VisibleAnnotation {
-        text: text.to_string(),
+    Some(VisibleAnnotation {
+        text: (*text).to_string(),
         index,
         total,
     })
@@ -766,6 +771,40 @@ mod tests {
 
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("[2/2]"));
+        assert!(rendered.contains("Second note."));
+    }
+
+    #[test]
+    fn renders_available_annotation_when_earlier_ref_is_missing() {
+        let mut annotations = HashMap::new();
+        annotations.insert("note-2".to_string(), "Second note.".to_string());
+        let document = Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "Text [1] and [2].".to_string(),
+                chapter_index: 0,
+                annotations: vec![
+                    AnnotationRef {
+                        id: "missing-note".to_string(),
+                        offset: "Text ".len(),
+                    },
+                    AnnotationRef {
+                        id: "note-2".to_string(),
+                        offset: "Text [1] and ".len(),
+                    },
+                ],
+            })],
+            toc: Vec::new(),
+            annotations,
+            chapter_ranges: Vec::new(),
+        };
+        let mut app = App::new(document);
+        app.apply(Action::OpenAnnotationOverlay);
+        let backend = TestBackend::new(50, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("Second note."));
     }
 
