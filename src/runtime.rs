@@ -47,7 +47,7 @@ pub fn build_app_with_image_mode(
     load_progress: impl FnOnce(&Path) -> Result<Option<Progress>, RuntimeError>,
 ) -> Result<App, RuntimeError> {
     let document = load_document(file)?;
-    let progress = load_progress(file)?;
+    let progress = load_progress(file).unwrap_or(None);
 
     let mut app = App::with_restored_progress(document, progress);
     app.set_image_mode(image_mode);
@@ -350,6 +350,30 @@ mod tests {
             },
         )
         .expect("build app");
+
+        assert_eq!(app.position().block_index, 0);
+        assert_eq!(app.position().sentence_offset, 0);
+    }
+
+    #[test]
+    fn build_app_ignores_progress_loader_errors() {
+        let app = build_app(
+            Path::new("/books/book.epub"),
+            |_| {
+                Ok(Document {
+                    blocks: vec![Block::Text(TextBlock {
+                        text: "First. Second.".to_string(),
+                        chapter_index: 0,
+                        annotations: Vec::new(),
+                    })],
+                    toc: Vec::new(),
+                    annotations: HashMap::new(),
+                    chapter_ranges: Vec::new(),
+                })
+            },
+            |_| Err(RuntimeError("progress file is corrupt".to_string())),
+        )
+        .expect("build app without restored progress");
 
         assert_eq!(app.position().block_index, 0);
         assert_eq!(app.position().sentence_offset, 0);
