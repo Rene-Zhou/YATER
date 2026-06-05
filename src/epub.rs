@@ -436,13 +436,30 @@ fn append_annotation_text_blocks(node: roxmltree::Node<'_, '_>, blocks: &mut Vec
 }
 
 fn normalized_descendant_text(node: roxmltree::Node<'_, '_>) -> String {
-    node.descendants()
-        .filter(|descendant| descendant.is_text())
-        .filter_map(|descendant| descendant.text())
-        .collect::<String>()
-        .split_whitespace()
+    let mut text = String::new();
+    append_descendant_text(node, &mut text);
+
+    text.lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join("\n")
+}
+
+fn append_descendant_text(node: roxmltree::Node<'_, '_>, text: &mut String) {
+    for child in node.children() {
+        if child.is_text() {
+            if let Some(child_text) = child.text() {
+                text.push_str(child_text);
+            }
+        } else if child.is_element() {
+            if child.tag_name().name() == "br" {
+                text.push('\n');
+            } else {
+                append_descendant_text(child, text);
+            }
+        }
+    }
 }
 
 fn blocks_from_xhtml_element(
@@ -922,6 +939,31 @@ mod tests {
         assert_eq!(
             document.annotation_text("note-1"),
             Some("First note paragraph.\nSecond note paragraph.")
+        );
+    }
+
+    #[test]
+    fn preserves_inline_line_breaks_in_annotation_plain_text() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Text with <a href="#note-1">[1]</a>.</p>
+    <aside id="note-1">
+      <p>First note line.<br/>Second note line.</p>
+    </aside>
+  </body>
+</html>"##,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.annotation_text("note-1"),
+            Some("First note line.\nSecond note line.")
         );
     }
 
