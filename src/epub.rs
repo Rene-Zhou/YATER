@@ -703,6 +703,9 @@ fn append_visible_blocks(
 
             if child.tag_name().name() == "img" {
                 flush_text_block(blocks, chapter_index, text, annotation_refs);
+                if let Some(id) = child.attribute("id") {
+                    fragment_targets.insert(id.to_string(), block_offset + blocks.len());
+                }
                 blocks.push(Block::Image(ImageBlock {
                     alt_text: child.attribute("alt").map(str::to_string),
                     source_path: child
@@ -712,6 +715,10 @@ fn append_visible_blocks(
                     chapter_index,
                 }));
                 continue;
+            }
+
+            if let Some(id) = child.attribute("id") {
+                fragment_targets.insert(id.to_string(), block_offset + blocks.len());
             }
 
             if let Some(id) = child
@@ -1847,6 +1854,40 @@ mod tests {
 
         assert_eq!(document.toc[0].target_block_index, 0);
         assert_eq!(document.toc[1].target_block_index, 2);
+    }
+
+    #[test]
+    fn resolves_inline_fragment_targets_to_their_containing_block() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Opening paragraph.</p>
+    <p><span id="section-two">Section Two.</span></p>
+  </body>
+</html>"#,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml#section-two">Section Two</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(document.toc.len(), 1);
+        assert_eq!(document.toc[0].target_block_index, 1);
     }
 
     #[test]
