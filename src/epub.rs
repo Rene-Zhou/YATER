@@ -52,6 +52,7 @@ pub fn open_with_issue_logger(
             Ok(chapter_xml) => match parse_xhtml_chapter(
                 &chapter_xml,
                 chapter_index,
+                &chapter_path,
                 &chapter_base,
             ) {
                 Ok(chapter) => chapter,
@@ -94,7 +95,7 @@ pub fn open_with_issue_logger(
 
         let item_path = join_zip_path(&opf_base, &item.href);
         match read_zip_text(&mut archive, &item_path) {
-            Ok(item_xml) => match parse_xhtml_annotations(&item_xml) {
+            Ok(item_xml) => match parse_xhtml_annotations(&item_xml, &item_path) {
                 Ok(item_annotations) => annotations.extend(item_annotations),
                 Err(error) => log_issue(&format!("malformed HTML: {item_path}: {error}")),
             },
@@ -264,14 +265,21 @@ fn parse_package(opf_xml: &str) -> Result<Package, EpubError> {
 fn parse_xhtml_chapter(
     xhtml: &str,
     chapter_index: usize,
+    chapter_path: &str,
     chapter_base: &str,
 ) -> Result<ParsedChapter, EpubError> {
     let document = roxmltree::Document::parse(xhtml)
         .map_err(|error| EpubError(format!("invalid XHTML chapter: {error}")))?;
     let mut blocks = Vec::new();
-    let annotations = annotations_from_document(&document);
+    let annotations = annotations_from_document(&document, chapter_path);
 
-    append_chapter_blocks(document.root_element(), chapter_index, chapter_base, &mut blocks);
+    append_chapter_blocks(
+        document.root_element(),
+        chapter_index,
+        chapter_path,
+        chapter_base,
+        &mut blocks,
+    );
 
     Ok(ParsedChapter {
         blocks,
@@ -279,14 +287,20 @@ fn parse_xhtml_chapter(
     })
 }
 
-fn parse_xhtml_annotations(xhtml: &str) -> Result<AnnotationStore, EpubError> {
+fn parse_xhtml_annotations(
+    xhtml: &str,
+    document_path: &str,
+) -> Result<AnnotationStore, EpubError> {
     let document = roxmltree::Document::parse(xhtml)
         .map_err(|error| EpubError(format!("invalid XHTML annotation document: {error}")))?;
 
-    Ok(annotations_from_document(&document))
+    Ok(annotations_from_document(&document, document_path))
 }
 
-fn annotations_from_document(document: &roxmltree::Document<'_>) -> AnnotationStore {
+fn annotations_from_document(
+    document: &roxmltree::Document<'_>,
+    document_path: &str,
+) -> AnnotationStore {
     let mut annotations = AnnotationStore::new();
 
     for node in document
@@ -297,7 +311,7 @@ fn annotations_from_document(document: &roxmltree::Document<'_>) -> AnnotationSt
             let text = node_text(node);
 
             if !text.is_empty() {
-                annotations.insert(id.to_string(), text);
+                annotations.insert(annotation_key(document_path, id), text);
             }
         }
     }
@@ -392,6 +406,7 @@ fn is_text_block_element(name: &str) -> bool {
 fn append_chapter_blocks(
     node: roxmltree::Node<'_, '_>,
     chapter_index: usize,
+    chapter_path: &str,
     chapter_base: &str,
     blocks: &mut Vec<Block>,
 ) {
@@ -404,10 +419,17 @@ fn append_chapter_blocks(
             blocks.extend(blocks_from_xhtml_element(
                 child,
                 chapter_index,
+                chapter_path,
                 chapter_base,
             ));
         } else {
-            append_chapter_blocks(child, chapter_index, chapter_base, blocks);
+            append_chapter_blocks(
+                child,
+                chapter_index,
+                chapter_path,
+                chapter_base,
+                blocks,
+            );
         }
     }
 }
@@ -495,6 +517,7 @@ fn append_descendant_text(node: roxmltree::Node<'_, '_>, text: &mut String) {
 fn blocks_from_xhtml_element(
     node: roxmltree::Node<'_, '_>,
     chapter_index: usize,
+    chapter_path: &str,
     chapter_base: &str,
 ) -> Vec<Block> {
     let mut blocks = Vec::new();
@@ -504,6 +527,7 @@ fn blocks_from_xhtml_element(
     append_visible_blocks(
         node,
         chapter_index,
+        chapter_path,
         chapter_base,
         &mut blocks,
         &mut text,
@@ -517,6 +541,7 @@ fn blocks_from_xhtml_element(
 fn append_visible_blocks(
     node: roxmltree::Node<'_, '_>,
     chapter_index: usize,
+    chapter_path: &str,
     chapter_base: &str,
     blocks: &mut Vec<Block>,
     text: &mut String,
@@ -542,6 +567,7 @@ fn append_visible_blocks(
                 blocks.extend(blocks_from_xhtml_element(
                     child,
                     chapter_index,
+                    chapter_path,
                     chapter_base,
                 ));
                 continue;
@@ -560,9 +586,12 @@ fn append_visible_blocks(
                 continue;
             }
 
-            if let Some(id) = child.attribute("href").and_then(annotation_id_from_href) {
+            if let Some(id) = child
+                .attribute("href")
+                .and_then(|href| annotation_key_from_href(href, chapter_path, chapter_base))
+            {
                 annotation_refs.push(AnnotationRef {
-                    id: id.to_string(),
+                    id,
                     offset: text.len(),
                 });
             }
@@ -570,6 +599,7 @@ fn append_visible_blocks(
             append_visible_blocks(
                 child,
                 chapter_index,
+                chapter_path,
                 chapter_base,
                 blocks,
                 text,
@@ -579,13 +609,26 @@ fn append_visible_blocks(
     }
 }
 
-fn annotation_id_from_href(href: &str) -> Option<&str> {
-    let (_, id) = href.rsplit_once('#')?;
+fn annotation_key_from_href(
+    href: &str,
+    document_path: &str,
+    document_base: &str,
+) -> Option<String> {
+    let (target, id) = href.rsplit_once('#')?;
     if id.is_empty() {
         None
     } else {
-        Some(id)
+        let target_path = if target.is_empty() {
+            document_path.to_string()
+        } else {
+            join_zip_path(document_base, target)
+        };
+        Some(annotation_key(&target_path, id))
     }
+}
+
+fn annotation_key(document_path: &str, id: &str) -> String {
+    format!("{document_path}#{id}")
 }
 
 fn flush_text_block(
@@ -900,11 +943,14 @@ mod tests {
         assert_eq!(
             block.annotations,
             vec![AnnotationRef {
-                id: "note-1".to_string(),
+                id: "OEBPS/chapter1.xhtml#note-1".to_string(),
                 offset: "Text with ".len(),
             }]
         );
-        assert_eq!(document.annotation_text("note-1"), Some("Footnote text."));
+        assert_eq!(
+            document.annotation_text("OEBPS/chapter1.xhtml#note-1"),
+            Some("Footnote text.")
+        );
     }
 
     #[test]
@@ -929,11 +975,14 @@ mod tests {
         assert_eq!(
             block.annotations,
             vec![AnnotationRef {
-                id: "note-1".to_string(),
+                id: "OEBPS/chapter1.xhtml#note-1".to_string(),
                 offset: "Text with ".len(),
             }]
         );
-        assert_eq!(document.annotation_text("note-1"), Some("Footnote text."));
+        assert_eq!(
+            document.annotation_text("OEBPS/chapter1.xhtml#note-1"),
+            Some("Footnote text.")
+        );
     }
 
     #[test]
@@ -980,14 +1029,79 @@ mod tests {
         assert_eq!(
             block.annotations,
             vec![AnnotationRef {
-                id: "note-1".to_string(),
+                id: "OEBPS/notes.xhtml#note-1".to_string(),
                 offset: "Text with ".len(),
             }]
         );
         assert_eq!(
-            document.annotation_text("note-1"),
+            document.annotation_text("OEBPS/notes.xhtml#note-1"),
             Some("Separate note text.")
         );
+    }
+
+    #[test]
+    fn keeps_same_annotation_id_distinct_across_note_files() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_extra_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>
+      First <a href="notes-a.xhtml#note-1">[1]</a>.
+      Second <a href="notes-b.xhtml#note-1">[2]</a>.
+    </p>
+  </body>
+</html>"##,
+            )],
+            &[
+                (
+                    "notes-a",
+                    "notes-a.xhtml",
+                    "application/xhtml+xml",
+                    r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><aside id="note-1"><p>First note.</p></aside></body>
+</html>"##,
+                ),
+                (
+                    "notes-b",
+                    "notes-b.xhtml",
+                    "application/xhtml+xml",
+                    r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><aside id="note-1"><p>Second note.</p></aside></body>
+</html>"##,
+                ),
+            ],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let block = document.text_block(0).expect("first text block");
+        let annotation_texts = block
+            .annotations
+            .iter()
+            .map(|annotation| {
+                document
+                    .annotation_text(&annotation.id)
+                    .expect("annotation text")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(annotation_texts, vec!["First note.", "Second note."]);
     }
 
     #[test]
@@ -1036,7 +1150,10 @@ mod tests {
             document.text_block(0).map(|block| block.text.as_str()),
             Some("Text with [1].")
         );
-        assert_eq!(document.annotation_text("note-1"), None);
+        assert_eq!(
+            document.annotation_text("OEBPS/notes.xhtml#note-1"),
+            None
+        );
         assert_eq!(issues.len(), 1);
         assert!(issues[0].contains("malformed HTML: OEBPS/notes.xhtml"));
     }
@@ -1078,7 +1195,10 @@ mod tests {
             document.text_block(0).map(|block| block.text.as_str()),
             Some("Text with [1].")
         );
-        assert_eq!(document.annotation_text("note-1"), None);
+        assert_eq!(
+            document.annotation_text("OEBPS/notes.xhtml#note-1"),
+            None
+        );
         assert_eq!(issues.len(), 1);
         assert!(issues[0].contains("malformed HTML: OEBPS/notes.xhtml"));
     }
@@ -1104,7 +1224,7 @@ mod tests {
         let document = open(&epub_path).expect("parse EPUB");
 
         assert_eq!(
-            document.annotation_text("note-1"),
+            document.annotation_text("OEBPS/chapter1.xhtml#note-1"),
             Some("First note paragraph.\nSecond note paragraph.")
         );
     }
@@ -1129,7 +1249,7 @@ mod tests {
         let document = open(&epub_path).expect("parse EPUB");
 
         assert_eq!(
-            document.annotation_text("note-1"),
+            document.annotation_text("OEBPS/chapter1.xhtml#note-1"),
             Some("First note line.\nSecond note line.")
         );
     }
@@ -1154,7 +1274,7 @@ mod tests {
         let document = open(&epub_path).expect("parse EPUB");
 
         assert_eq!(
-            document.annotation_text("note-1"),
+            document.annotation_text("OEBPS/chapter1.xhtml#note-1"),
             Some("Visible note.")
         );
     }

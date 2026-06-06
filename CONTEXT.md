@@ -15,7 +15,7 @@ A footnote or endnote extracted from the EPUB at parse time. Stored as plain tex
 Metadata attached to a `TextBlock`. Points into the `AnnotationStore` by ID and records the character offset of the anchor within the block's plain text. Enables the renderer to highlight the anchor and look up the annotation text on `;`.
 
 ### AnnotationStore
-A top-level `HashMap<String, String>` mapping annotation IDs to their pre-extracted plain text. Populated once at parse time.
+A top-level `HashMap<String, String>` mapping document-qualified annotation IDs (normalized XHTML path plus fragment) to their pre-extracted plain text. EPUB fragment IDs are local to an XHTML document, so qualification prevents same-named notes in different files from colliding. Populated once at parse time.
 
 ### Focus
 An enum representing which UI component currently owns keyboard input. Four variants: `Content` (reading), `Toc` (sidebar navigation), `AnnotationOverlay` (floating footnote), `AnnotationImmersed` (deep reading inside annotation). Transitions are explicit: `Tab` toggles `Content`/`Toc`, `;` enters `AnnotationOverlay` from `Content`, `Enter` deepens to `AnnotationImmersed`, `Esc` pops back one level.
