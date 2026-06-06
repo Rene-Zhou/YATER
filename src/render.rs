@@ -31,8 +31,11 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     frame.render_widget(Paragraph::new(chapter_title).centered(), top_bar);
 
     if !draw_current_image(frame, content, app) {
+        let scroll = content_scroll_offset(app, content);
         frame.render_widget(
-            Paragraph::new(current_content_lines(app, content)).wrap(Wrap { trim: false }),
+            Paragraph::new(current_content_lines(app, content))
+                .wrap(Wrap { trim: false })
+                .scroll((scroll, 0)),
             content,
         );
     }
@@ -324,7 +327,9 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, content: Rect, app: &
         content.y
     } else {
         let sentence_row = current_sentence_screen_row(app, content.width).unwrap_or(0);
-        content.y + sentence_row.saturating_sub(height)
+        let visible_sentence_row =
+            sentence_row.saturating_sub(content_scroll_offset(app, content));
+        content.y + visible_sentence_row.saturating_sub(height)
     };
     let area = Rect {
         x: content.x,
@@ -348,9 +353,23 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, content: Rect, app: &
 fn current_sentence_screen_row(app: &App, width: u16) -> Option<u16> {
     let position = app.position();
     let block = app.document().text_block(position.block_index)?;
-    let prefix = block.text.get(..position.sentence_offset)?;
+    let sentence_range = segment_sentences(&block.text)
+        .into_iter()
+        .find(|range| range.0 == position.sentence_offset)?;
+    let sentence = block.text.get(sentence_range.0..sentence_range.1)?;
+    let visible_sentence = sentence.trim_start_matches(char::is_whitespace);
+    let visible_start = sentence_range.1 - visible_sentence.len();
+    let prefix = block.text.get(..visible_start)?;
 
     Some(wrapped_row_for_prefix(prefix, width))
+}
+
+fn content_scroll_offset(app: &App, content: Rect) -> u16 {
+    let Some(sentence_row) = current_sentence_screen_row(app, content.width) else {
+        return 0;
+    };
+
+    sentence_row.saturating_sub(content.height.saturating_sub(1))
 }
 
 fn wrapped_row_for_prefix(prefix: &str, width: u16) -> u16 {
@@ -496,6 +515,39 @@ mod tests {
         assert!(rendered.contains("First sentence."));
         assert!(rendered.contains("Second sentence."));
         assert!(rendered.contains("Third sentence."));
+    }
+
+    #[test]
+    fn scrolls_content_to_keep_current_sentence_visible() {
+        let prefix = "One.\nTwo.\nThree.\nFour.\nFive.\nSix.\n";
+        let document = Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: format!("{prefix}Seven."),
+                chapter_index: 0,
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::with_position(
+            document,
+            ReadingPosition {
+                block_index: 0,
+                sentence_offset: prefix.len() - 1,
+            },
+        );
+        let backend = TestBackend::new(30, 5);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert!(row_with_text_has_modifier(
+            terminal.backend().buffer(),
+            "Seven.",
+            Modifier::REVERSED,
+        ));
+        assert!(!buffer_text(terminal.backend().buffer()).contains("One."));
     }
 
     #[test]
