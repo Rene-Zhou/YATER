@@ -435,7 +435,15 @@ fn append_chapter_blocks(
 }
 
 fn is_annotation_container(node: roxmltree::Node<'_, '_>) -> bool {
-    matches!(node.tag_name().name(), "aside" | "note") && node.attribute("id").is_some()
+    node.attribute("id").is_some()
+        && (matches!(node.tag_name().name(), "aside" | "note")
+            || node.attributes().any(|attribute| {
+                attribute.name() == "type"
+                    && attribute
+                        .value()
+                        .split_whitespace()
+                        .any(|value| matches!(value, "footnote" | "endnote"))
+            }))
 }
 
 fn has_annotation_ancestor(node: roxmltree::Node<'_, '_>) -> bool {
@@ -1036,6 +1044,58 @@ mod tests {
         assert_eq!(
             document.annotation_text("OEBPS/notes.xhtml#note-1"),
             Some("Separate note text.")
+        );
+    }
+
+    #[test]
+    fn extracts_epub_typed_footnotes_from_list_items() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_extra_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Text with <a href="notes.xhtml#note-1">[1]</a>.</p>
+  </body>
+</html>"##,
+            )],
+            &[(
+                "notes",
+                "notes.xhtml",
+                "application/xhtml+xml",
+                r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <ol>
+      <li id="note-1" epub:type="footnote"><p>List footnote text.</p></li>
+    </ol>
+  </body>
+</html>"##,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let annotation = &document
+            .text_block(0)
+            .expect("first text block")
+            .annotations[0];
+
+        assert_eq!(
+            document.annotation_text(&annotation.id),
+            Some("List footnote text.")
         );
     }
 
