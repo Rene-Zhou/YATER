@@ -107,6 +107,7 @@ pub fn run_terminal_loop<B: ratatui::backend::Backend>(
     app: &mut App,
     keys: impl IntoIterator<Item = crossterm::event::KeyEvent>,
 ) -> Result<(), RuntimeError> {
+    sync_terminal_width(terminal, app)?;
     terminal
         .draw(|frame| render::draw(frame, app))
         .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -172,6 +173,7 @@ where
     B: ratatui::backend::Backend,
     E: EventSource,
 {
+    sync_terminal_width(terminal, app)?;
     terminal
         .draw(|frame| render::draw(frame, app))
         .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -198,7 +200,8 @@ where
                     .draw(|frame| render::draw(frame, app))
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
             }
-            RuntimeEvent::Terminal(crossterm::event::Event::Resize(_, _)) => {
+            RuntimeEvent::Terminal(crossterm::event::Event::Resize(width, _)) => {
+                app.set_terminal_width(width);
                 terminal
                     .draw(|frame| render::draw(frame, app))
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -234,6 +237,7 @@ where
     B: ratatui::backend::Backend,
     E: EventSource,
 {
+    sync_terminal_width(terminal, app)?;
     terminal
         .draw(|frame| render::draw(frame, app))
         .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -249,7 +253,8 @@ where
                     .draw(|frame| render::draw(frame, app))
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
             }
-            RuntimeEvent::Terminal(crossterm::event::Event::Resize(_, _)) => {
+            RuntimeEvent::Terminal(crossterm::event::Event::Resize(width, _)) => {
+                app.set_terminal_width(width);
                 terminal
                     .draw(|frame| render::draw(frame, app))
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -258,6 +263,17 @@ where
         }
     }
 
+    Ok(())
+}
+
+fn sync_terminal_width<B: ratatui::backend::Backend>(
+    terminal: &ratatui::Terminal<B>,
+    app: &mut App,
+) -> Result<(), RuntimeError> {
+    let size = terminal
+        .size()
+        .map_err(|error| RuntimeError::new(error.to_string()))?;
+    app.set_terminal_width(size.width);
     Ok(())
 }
 
@@ -270,7 +286,8 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    use crate::document::{Block, Document, TextBlock, TocNode};
+    use crate::app::App;
+    use crate::document::{AnnotationRef, Block, Document, TextBlock, TocNode};
     use crate::image::SelectedImageMode;
     use crate::input::Focus;
     use crate::progress::Progress;
@@ -595,6 +612,41 @@ mod tests {
         .expect("run terminal loop");
 
         assert_eq!(app.position().sentence_offset, "First.".len());
+    }
+
+    #[test]
+    fn terminal_loop_uses_terminal_width_for_annotation_scrolling() {
+        let mut app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "Text with [1].".to_string(),
+                chapter_index: 0,
+                annotations: vec![AnnotationRef {
+                    id: "note-1".to_string(),
+                    offset: "Text with ".len(),
+                }],
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::from([(
+                "note-1".to_string(),
+                "Alpha beta gamma delta epsilon zeta.".to_string(),
+            )]),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(20, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        super::run_terminal_loop(
+            &mut terminal,
+            &mut app,
+            [
+                KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            ],
+        )
+        .expect("run terminal loop");
+
+        assert_eq!(app.annotation_scroll(), 1);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::sentence::segment_sentences;
 use unicode_width::UnicodeWidthStr;
 
 const PAGE_SENTENCE_COUNT: usize = 10;
-const ANNOTATION_TEXT_WIDTH: usize = 48;
+const DEFAULT_ANNOTATION_TEXT_WIDTH: usize = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadingPosition {
@@ -29,6 +29,7 @@ pub struct App {
     image_mode: SelectedImageMode,
     selected_annotation_index: usize,
     annotation_scroll: usize,
+    annotation_text_width: usize,
 }
 
 impl App {
@@ -45,6 +46,7 @@ impl App {
             image_mode: SelectedImageMode::Halfblock,
             selected_annotation_index: 0,
             annotation_scroll: 0,
+            annotation_text_width: DEFAULT_ANNOTATION_TEXT_WIDTH,
         }
     }
 
@@ -77,6 +79,7 @@ impl App {
             image_mode,
             selected_annotation_index: 0,
             annotation_scroll: 0,
+            annotation_text_width: DEFAULT_ANNOTATION_TEXT_WIDTH,
         }
     }
 
@@ -145,6 +148,11 @@ impl App {
 
     pub fn set_image_mode(&mut self, image_mode: SelectedImageMode) {
         self.image_mode = image_mode;
+    }
+
+    pub fn set_terminal_width(&mut self, terminal_width: u16) {
+        self.annotation_text_width =
+            usize::from(terminal_width.min(50).saturating_sub(2).max(1));
     }
 
     pub fn is_toc_path_collapsed(&self, path: &[usize]) -> bool {
@@ -441,7 +449,7 @@ impl App {
 
     fn current_annotation_line_count(&self) -> usize {
         self.current_annotation_text()
-            .map(annotation_display_line_count)
+            .map(|text| annotation_display_line_count(text, self.annotation_text_width))
             .unwrap_or(0)
     }
 
@@ -484,12 +492,12 @@ impl App {
     }
 }
 
-fn annotation_display_line_count(text: &str) -> usize {
+fn annotation_display_line_count(text: &str, width: usize) -> usize {
     text.lines()
         .map(|line| {
             UnicodeWidthStr::width(line)
                 .max(1)
-                .div_ceil(ANNOTATION_TEXT_WIDTH)
+                .div_ceil(width.max(1))
         })
         .sum::<usize>()
         .max(1)
