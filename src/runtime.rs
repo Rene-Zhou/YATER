@@ -204,9 +204,10 @@ where
                     pending_progress = Some(app.progress(timestamp()));
                 }
 
-                terminal
-                    .draw(|frame| render::draw(frame, app))
-                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+                if let Err(error) = terminal.draw(|frame| render::draw(frame, app)) {
+                    flush_pending_progress(&mut pending_progress, &mut save_progress)?;
+                    return Err(RuntimeError::new(error.to_string()));
+                }
             }
             RuntimeEvent::Terminal(crossterm::event::Event::Resize(width, _)) => {
                 app.set_terminal_width(width);
@@ -288,10 +289,13 @@ fn sync_terminal_width<B: ratatui::backend::Backend>(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io;
     use std::path::Path;
 
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::TestBackend;
+    use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
+    use ratatui::buffer::Cell;
+    use ratatui::layout::{Position, Size};
     use ratatui::Terminal;
 
     use crate::app::App;
@@ -304,6 +308,80 @@ mod tests {
 
     struct VecEventSource {
         events: Vec<RuntimeEvent>,
+    }
+
+    struct FailingDrawBackend {
+        size: Size,
+        draw_calls: usize,
+        fail_on_draw: usize,
+    }
+
+    impl FailingDrawBackend {
+        fn new(width: u16, height: u16, fail_on_draw: usize) -> Self {
+            Self {
+                size: Size::new(width, height),
+                draw_calls: 0,
+                fail_on_draw,
+            }
+        }
+    }
+
+    impl Backend for FailingDrawBackend {
+        type Error = io::Error;
+
+        fn draw<'a, I>(&mut self, _content: I) -> Result<(), Self::Error>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            self.draw_calls += 1;
+            if self.draw_calls == self.fail_on_draw {
+                return Err(io::Error::other("draw failed"));
+            }
+
+            Ok(())
+        }
+
+        fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn show_cursor(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+            Ok(Position::default())
+        }
+
+        fn set_cursor_position<P: Into<Position>>(
+            &mut self,
+            _position: P,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn clear(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn clear_region(&mut self, _clear_type: ClearType) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn size(&self) -> Result<Size, Self::Error> {
+            Ok(self.size)
+        }
+
+        fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+            Ok(WindowSize {
+                columns_rows: self.size,
+                pixels: Size::default(),
+            })
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
     }
 
     impl EventSource for VecEventSource {
@@ -916,6 +994,58 @@ mod tests {
         .expect_err("event source should fail");
 
         assert_eq!(error.to_string(), "no more events");
+        assert_eq!(
+            saved_progress,
+            vec![Progress {
+                block_index: 0,
+                sentence_offset: "First.".len(),
+                timestamp: "2026-06-04T12:00:00Z".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn terminal_event_loop_flushes_progress_before_draw_error() {
+        let mut app = build_app(
+            Path::new("/books/book.epub"),
+            |_| {
+                Ok(Document {
+                    blocks: vec![Block::Text(TextBlock {
+                        text: "First. Second.".to_string(),
+                        chapter_index: 0,
+                        annotations: Vec::new(),
+                    })],
+                    toc: Vec::new(),
+                    annotations: HashMap::new(),
+                    chapter_ranges: Vec::new(),
+                })
+            },
+            |_| Ok(None),
+        )
+        .expect("build app");
+        let backend = FailingDrawBackend::new(40, 6, 2);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut events = VecEventSource {
+            events: vec![terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('j'),
+                KeyModifiers::NONE,
+            )))],
+        };
+        let mut saved_progress = Vec::new();
+
+        let error = super::run_terminal_event_loop_with_progress(
+            &mut terminal,
+            &mut app,
+            &mut events,
+            || "2026-06-04T12:00:00Z".to_string(),
+            |progress| {
+                saved_progress.push(progress);
+                Ok(())
+            },
+        )
+        .expect_err("draw should fail");
+
+        assert_eq!(error.to_string(), "draw failed");
         assert_eq!(
             saved_progress,
             vec![Progress {
