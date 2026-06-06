@@ -904,7 +904,7 @@ mod tests {
 
     use tempfile::tempdir;
     use zip::write::SimpleFileOptions;
-    use zip::ZipWriter;
+    use zip::{CompressionMethod, ZipWriter};
 
     use crate::document::{AnnotationRef, Block, ChapterRange};
 
@@ -947,6 +947,40 @@ mod tests {
                 end_block: 2,
             })
         );
+    }
+
+    #[test]
+    fn parses_deflate_compressed_epub() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_options(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><p>Compressed chapter.</p></body>
+</html>"#,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
+        );
+
+        let document = open(&epub_path).expect("parse compressed EPUB");
+
+        assert_eq!(
+            document.text_block(0).map(|block| block.text.as_str()),
+            Some("Compressed chapter.")
+        );
+        assert_eq!(document.toc.len(), 1);
     }
 
     #[test]
@@ -2223,9 +2257,45 @@ mod tests {
         nav_xhtml: Option<&str>,
         image_file: Option<(&str, &[u8])>,
     ) {
+        write_epub_with_optional_nav_file_and_options(
+            path,
+            chapters,
+            extra_files,
+            missing_extra_files,
+            nav_xhtml,
+            image_file,
+            SimpleFileOptions::default(),
+        );
+    }
+
+    fn write_epub_with_options(
+        path: &Path,
+        chapters: &[(&str, &str, &str)],
+        nav_xhtml: &str,
+        options: SimpleFileOptions,
+    ) {
+        write_epub_with_optional_nav_file_and_options(
+            path,
+            chapters,
+            &[],
+            &[],
+            Some(nav_xhtml),
+            None,
+            options,
+        );
+    }
+
+    fn write_epub_with_optional_nav_file_and_options(
+        path: &Path,
+        chapters: &[(&str, &str, &str)],
+        extra_files: &[(&str, &str, &str, &str)],
+        missing_extra_files: &[(&str, &str, &str)],
+        nav_xhtml: Option<&str>,
+        image_file: Option<(&str, &[u8])>,
+        options: SimpleFileOptions,
+    ) {
         let file = File::create(path).expect("create epub");
         let mut writer = ZipWriter::new(file);
-        let options = SimpleFileOptions::default();
 
         write_zip_file(
             &mut writer,
