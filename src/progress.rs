@@ -46,7 +46,18 @@ impl ProgressStore {
     }
 
     pub fn load(&self, book_path: &Path) -> io::Result<Option<Progress>> {
-        Ok(self.load_all()?.remove(&progress_key(book_path)))
+        let mut progress_by_book = self.load_all()?;
+        let canonical_key = progress_key(book_path);
+        if let Some(progress) = progress_by_book.remove(&canonical_key) {
+            return Ok(Some(progress));
+        }
+
+        let legacy_key = progress_by_book
+            .keys()
+            .find(|stored_path| progress_key(Path::new(stored_path)) == canonical_key)
+            .cloned();
+
+        Ok(legacy_key.and_then(|key| progress_by_book.remove(&key)))
     }
 
     fn load_all(&self) -> io::Result<HashMap<String, Progress>> {
@@ -84,6 +95,7 @@ pub fn progress_path_from_env(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
     use tempfile::tempdir;
@@ -163,6 +175,36 @@ mod tests {
 
         assert_eq!(
             store.load(&book_path).expect("load progress"),
+            Some(progress)
+        );
+    }
+
+    #[test]
+    fn loads_progress_saved_under_a_legacy_aliased_path() {
+        let tempdir = tempdir().expect("temp dir");
+        let book_path = tempdir.path().join("book.epub");
+        std::fs::write(&book_path, "book").expect("write book");
+        std::fs::create_dir(tempdir.path().join("subdir")).expect("create subdir");
+        let aliased_book_path = tempdir.path().join("subdir/../book.epub");
+        let progress_path = tempdir.path().join("progress.json");
+        let progress = Progress {
+            block_index: 9,
+            sentence_offset: 13,
+            timestamp: "2026-06-06T12:00:00Z".to_string(),
+        };
+        let legacy_progress = HashMap::from([(
+            aliased_book_path.to_string_lossy().into_owned(),
+            progress.clone(),
+        )]);
+        std::fs::write(
+            &progress_path,
+            serde_json::to_string(&legacy_progress).expect("serialize legacy progress"),
+        )
+        .expect("write progress");
+        let store = ProgressStore::new(progress_path);
+
+        assert_eq!(
+            store.load(&book_path).expect("load legacy progress"),
             Some(progress)
         );
     }
