@@ -8,8 +8,10 @@ use crate::image::SelectedImageMode;
 use crate::input::{Action, Focus};
 use crate::progress::Progress;
 use crate::sentence::segment_sentences;
+use unicode_width::UnicodeWidthStr;
 
 const PAGE_SENTENCE_COUNT: usize = 10;
+const ANNOTATION_TEXT_WIDTH: usize = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadingPosition {
@@ -439,7 +441,7 @@ impl App {
 
     fn current_annotation_line_count(&self) -> usize {
         self.current_annotation_text()
-            .map(|text| text.lines().count().max(1))
+            .map(annotation_display_line_count)
             .unwrap_or(0)
     }
 
@@ -480,6 +482,17 @@ impl App {
             .filter(|annotation_ref| self.document.annotation_text(&annotation_ref.id).is_some())
             .count()
     }
+}
+
+fn annotation_display_line_count(text: &str) -> usize {
+    text.lines()
+        .map(|line| {
+            UnicodeWidthStr::width(line)
+                .max(1)
+                .div_ceil(ANNOTATION_TEXT_WIDTH)
+        })
+        .sum::<usize>()
+        .max(1)
 }
 
 #[derive(Clone)]

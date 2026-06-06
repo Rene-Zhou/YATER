@@ -332,17 +332,17 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, content: Rect, app: &
         width,
         height,
     };
-    let annotation_text = if is_immersed {
-        annotation.scrolled_text(app.annotation_scroll())
-    } else {
-        annotation.display_text()
-    };
+    let annotation_text = annotation.display_text();
+    let mut paragraph =
+        Paragraph::new(annotation_text).block(WidgetBlock::default().borders(Borders::ALL));
+    if is_immersed {
+        paragraph = paragraph
+            .wrap(Wrap { trim: false })
+            .scroll((app.annotation_scroll().min(u16::MAX as usize) as u16, 0));
+    }
 
     frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(annotation_text).block(WidgetBlock::default().borders(Borders::ALL)),
-        area,
-    );
+    frame.render_widget(paragraph, area);
 }
 
 fn current_sentence_screen_row(app: &App, width: u16) -> Option<u16> {
@@ -398,14 +398,6 @@ impl VisibleAnnotation {
         } else {
             self.text.clone()
         }
-    }
-
-    fn scrolled_text(&self, scroll: usize) -> String {
-        self.display_text()
-            .lines()
-            .skip(scroll)
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 }
 
@@ -841,6 +833,44 @@ mod tests {
         assert!(!rendered.contains("Top note line"));
         assert!(rendered.contains("Visible note line"));
         assert!(rendered.contains("Another visible line"));
+    }
+
+    #[test]
+    fn scrolls_wrapped_single_line_annotation_when_immersed() {
+        let mut annotations = HashMap::new();
+        annotations.insert(
+            "note-1".to_string(),
+            concat!(
+                "Start alpha beta gamma delta epsilon zeta eta theta ",
+                "iota kappa lambda mu nu xi omicron pi rho sigma tau end."
+            )
+            .to_string(),
+        );
+        let document = Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "Text with [1].".to_string(),
+                chapter_index: 0,
+                annotations: vec![AnnotationRef {
+                    id: "note-1".to_string(),
+                    offset: "Text with ".len(),
+                }],
+            })],
+            toc: Vec::new(),
+            annotations,
+            chapter_ranges: Vec::new(),
+        };
+        let mut app = App::new(document);
+        app.apply(Action::OpenAnnotationOverlay);
+        app.apply(Action::ImmerseAnnotation);
+        app.apply(Action::ScrollAnnotationDown);
+        let backend = TestBackend::new(50, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(!rendered.contains("Start alpha"));
+        assert!(rendered.contains("sigma tau end."));
     }
 
     #[test]
