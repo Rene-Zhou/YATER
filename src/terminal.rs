@@ -67,7 +67,10 @@ where
     B: TerminalSessionBackend,
     F: FnOnce() -> Result<T, TerminalError>,
 {
-    backend.enter()?;
+    if let Err(error) = backend.enter() {
+        let _ = backend.exit();
+        return Err(error);
+    }
     let result = std::panic::catch_unwind(AssertUnwindSafe(run));
     let exit_result = backend.exit();
 
@@ -102,11 +105,15 @@ mod tests {
     #[derive(Default)]
     struct RecordingBackend {
         events: Vec<&'static str>,
+        fail_enter: bool,
     }
 
     impl TerminalSessionBackend for RecordingBackend {
         fn enter(&mut self) -> Result<(), TerminalError> {
             self.events.push("enter");
+            if self.fail_enter {
+                return Err(TerminalError::new("enter failed"));
+            }
             Ok(())
         }
 
@@ -123,6 +130,19 @@ mod tests {
         let result = with_terminal_session(&mut backend, || Ok(42)).expect("run session");
 
         assert_eq!(result, 42);
+        assert_eq!(backend.events, vec!["enter", "exit"]);
+    }
+
+    #[test]
+    fn exits_terminal_session_after_failed_enter() {
+        let mut backend = RecordingBackend {
+            fail_enter: true,
+            ..RecordingBackend::default()
+        };
+
+        let error = with_terminal_session(&mut backend, || Ok(())).expect_err("enter should fail");
+
+        assert_eq!(error.to_string(), "enter failed");
         assert_eq!(backend.events, vec!["enter", "exit"]);
     }
 
