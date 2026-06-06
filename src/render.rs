@@ -180,9 +180,21 @@ fn render_halfblock_image(
         return None;
     }
 
-    let image = ::image::load_from_memory(data).ok()?.to_rgba8();
-    let width = image.width().min(terminal_width as u32);
-    let height = image.height().min((terminal_height as u32).saturating_mul(2));
+    let max_width = terminal_width as u32;
+    let max_height = (terminal_height as u32).saturating_mul(2);
+    let decoded = ::image::load_from_memory(data).ok()?;
+    let image = if decoded.width() > max_width || decoded.height() > max_height {
+        decoded.resize(
+            max_width,
+            max_height,
+            ::image::imageops::FilterType::Nearest,
+        )
+    } else {
+        decoded
+    }
+    .to_rgba8();
+    let width = image.width();
+    let height = image.height();
     if width == 0 || height == 0 {
         return None;
     }
@@ -456,7 +468,7 @@ mod tests {
     use std::io::Cursor;
 
     use ratatui::backend::TestBackend;
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Modifier};
     use ratatui::Terminal;
 
     use crate::app::{App, ReadingPosition};
@@ -1026,6 +1038,33 @@ mod tests {
     }
 
     #[test]
+    fn halfblock_image_scales_to_include_the_full_source_width() {
+        let document = Document {
+            blocks: vec![Block::Image(ImageBlock {
+                alt_text: Some("Wide diagram".to_string()),
+                source_path: Some("OEBPS/images/wide.png".to_string()),
+                data: Some(wide_test_png_bytes()),
+                chapter_index: 0,
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::with_image_mode(document, crate::image::SelectedImageMode::Halfblock);
+        let backend = TestBackend::new(20, 4);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert!(terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .any(|cell| cell.fg == Color::Rgb(0, 0, 255)));
+    }
+
+    #[test]
     fn renders_sixel_image_when_data_is_loaded() {
         let document = Document {
             blocks: vec![Block::Image(ImageBlock {
@@ -1220,6 +1259,21 @@ mod tests {
             (1, 0) => ::image::Rgba([0, 255, 0, 255]),
             (0, 1) => ::image::Rgba([0, 0, 255, 255]),
             _ => ::image::Rgba([255, 255, 255, 255]),
+        });
+        let mut bytes = Cursor::new(Vec::new());
+        ::image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, ::image::ImageFormat::Png)
+            .expect("encode png");
+        bytes.into_inner()
+    }
+
+    fn wide_test_png_bytes() -> Vec<u8> {
+        let image = ::image::RgbaImage::from_fn(100, 2, |x, _| {
+            if x < 50 {
+                ::image::Rgba([255, 0, 0, 255])
+            } else {
+                ::image::Rgba([0, 0, 255, 255])
+            }
         });
         let mut bytes = Cursor::new(Vec::new());
         ::image::DynamicImage::ImageRgba8(image)
