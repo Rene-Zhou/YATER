@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -36,6 +36,10 @@ pub enum Action {
 }
 
 pub fn map_key(focus: Focus, key: KeyEvent) -> Action {
+    if key.kind == KeyEventKind::Release {
+        return Action::Unhandled;
+    }
+
     match (focus, key.code) {
         (Focus::Content, KeyCode::Char('j') | KeyCode::Down) => Action::NextSentence,
         (Focus::Content, KeyCode::Char('k') | KeyCode::Up) => Action::PreviousSentence,
@@ -67,7 +71,7 @@ pub fn map_key(focus: Focus, key: KeyEvent) -> Action {
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
     use super::{map_key, Action, Focus};
 
@@ -79,6 +83,20 @@ mod tests {
         );
 
         assert_eq!(action, Action::NextSentence);
+    }
+
+    #[test]
+    fn key_release_does_not_trigger_an_action() {
+        let action = map_key(
+            Focus::Content,
+            KeyEvent::new_with_kind(
+                KeyCode::Char('j'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            ),
+        );
+
+        assert_eq!(action, Action::Unhandled);
     }
 
     #[test]
