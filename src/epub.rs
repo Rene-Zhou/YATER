@@ -109,18 +109,24 @@ pub fn open_with_issue_logger(
         }
     }
 
-    let toc = if let Some(nav_item) = package.nav_item() {
-        let nav_path = join_zip_path(&opf_base, &nav_item.href);
-        match read_zip_text(&mut archive, &nav_path) {
-            Ok(nav_xml) => match parse_toc(&nav_xml, &nav_path, &target_blocks_by_href) {
-                Ok(toc) => toc,
-                Err(error) => {
-                    log_issue(&format!("malformed HTML: {nav_path}: {error}"));
-                    Vec::new()
+    let toc = if let Some((toc_item, format)) = package.toc_item() {
+        let toc_path = join_zip_path(&opf_base, &toc_item.href);
+        match read_zip_text(&mut archive, &toc_path) {
+            Ok(toc_xml) => {
+                let parsed_toc = match format {
+                    TocFormat::Nav => parse_toc(&toc_xml, &toc_path, &target_blocks_by_href),
+                    TocFormat::Ncx => parse_ncx(&toc_xml, &toc_path, &target_blocks_by_href),
+                };
+                match parsed_toc {
+                    Ok(toc) => toc,
+                    Err(error) => {
+                        log_issue(&format!("malformed HTML: {toc_path}: {error}"));
+                        Vec::new()
+                    }
                 }
-            },
+            }
             Err(error) => {
-                log_issue(&format!("malformed HTML: {nav_path}: {error}"));
+                log_issue(&format!("malformed HTML: {toc_path}: {error}"));
                 Vec::new()
             }
         }
@@ -139,14 +145,35 @@ pub fn open_with_issue_logger(
 struct Package {
     manifest: HashMap<String, ManifestItem>,
     spine_idrefs: Vec<String>,
+    spine_toc_id: Option<String>,
 }
 
 impl Package {
-    fn nav_item(&self) -> Option<&ManifestItem> {
-        self.manifest
+    fn toc_item(&self) -> Option<(&ManifestItem, TocFormat)> {
+        if let Some(nav_item) = self
+            .manifest
             .values()
             .find(|item| item.properties.split_whitespace().any(|value| value == "nav"))
+        {
+            return Some((nav_item, TocFormat::Nav));
+        }
+
+        self.spine_toc_id
+            .as_ref()
+            .and_then(|id| self.manifest.get(id))
+            .or_else(|| {
+                self.manifest
+                    .values()
+                    .find(|item| item.media_type == "application/x-dtbncx+xml")
+            })
+            .map(|item| (item, TocFormat::Ncx))
     }
+}
+
+#[derive(Clone, Copy)]
+enum TocFormat {
+    Nav,
+    Ncx,
 }
 
 struct ManifestItem {
@@ -238,6 +265,11 @@ fn parse_package(opf_xml: &str) -> Result<Package, EpubError> {
         .map_err(|error| EpubError(format!("invalid OPF package: {error}")))?;
     let mut manifest = HashMap::new();
     let mut spine_idrefs = Vec::new();
+    let spine_toc_id = document
+        .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "spine")
+        .and_then(|node| node.attribute("toc"))
+        .map(str::to_string);
 
     for node in document
         .descendants()
@@ -267,6 +299,7 @@ fn parse_package(opf_xml: &str) -> Result<Package, EpubError> {
     Ok(Package {
         manifest,
         spine_idrefs,
+        spine_toc_id,
     })
 }
 
@@ -401,6 +434,59 @@ fn parse_toc_item(
         .find(|node| node.is_element() && node.tag_name().name() == "ol")
         .map(|list| parse_toc_list(list, nav_path, target_blocks_by_href))
         .unwrap_or_default();
+
+    Some(TocNode {
+        title,
+        target_block_index,
+        children,
+    })
+}
+
+fn parse_ncx(
+    ncx_xml: &str,
+    ncx_path: &str,
+    target_blocks_by_href: &HashMap<String, usize>,
+) -> Result<Vec<TocNode>, EpubError> {
+    let document = roxmltree::Document::parse(ncx_xml)
+        .map_err(|error| EpubError(format!("invalid EPUB NCX document: {error}")))?;
+    let Some(nav_map) = document
+        .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "navMap")
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(nav_map
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "navPoint")
+        .filter_map(|node| parse_ncx_nav_point(node, ncx_path, target_blocks_by_href))
+        .collect())
+}
+
+fn parse_ncx_nav_point(
+    nav_point: roxmltree::Node<'_, '_>,
+    ncx_path: &str,
+    target_blocks_by_href: &HashMap<String, usize>,
+) -> Option<TocNode> {
+    let title = nav_point
+        .children()
+        .find(|node| node.is_element() && node.tag_name().name() == "navLabel")
+        .map(normalized_descendant_text)?;
+    if title.is_empty() {
+        return None;
+    }
+
+    let href = nav_point
+        .children()
+        .find(|node| node.is_element() && node.tag_name().name() == "content")?
+        .attribute("src")?;
+    let target_key = resolve_href(ncx_path, href);
+    let target_block_index = *target_blocks_by_href.get(&target_key)?;
+    let children = nav_point
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "navPoint")
+        .filter_map(|node| parse_ncx_nav_point(node, ncx_path, target_blocks_by_href))
+        .collect();
 
     Some(TocNode {
         title,
@@ -1710,6 +1796,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_epub2_ncx_toc_tree() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub2_with_ncx(&epub_path);
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(document.toc.len(), 1);
+        assert_eq!(document.toc[0].title, "Chapter One");
+        assert_eq!(document.toc[0].target_block_index, 0);
+        assert_eq!(document.toc[0].children.len(), 1);
+        assert_eq!(document.toc[0].children[0].title, "Section Two");
+        assert_eq!(document.toc[0].children[0].target_block_index, 2);
+    }
+
+    #[test]
     fn resolves_toc_fragments_to_blocks_within_a_chapter() {
         let tempdir = tempdir().expect("temp dir");
         let epub_path = tempdir.path().join("book.epub");
@@ -1820,6 +1922,73 @@ mod tests {
             chapter_xhtml,
             Some(("OEBPS/images/picture.png", image.as_slice())),
         );
+    }
+
+    fn write_epub2_with_ncx(path: &Path) {
+        let file = File::create(path).expect("create epub");
+        let mut writer = ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+
+        write_zip_file(&mut writer, options, "mimetype", "application/epub+zip");
+        write_zip_file(
+            &mut writer,
+            options,
+            "META-INF/container.xml",
+            r#"<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+        );
+        write_zip_file(
+            &mut writer,
+            options,
+            "OEBPS/content.opf",
+            r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="chapter1"/>
+  </spine>
+</package>"#,
+        );
+        write_zip_file(
+            &mut writer,
+            options,
+            "OEBPS/chapter1.xhtml",
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <h1 id="chapter-one">Chapter One</h1>
+    <p>Opening paragraph.</p>
+    <h2 id="section-two">Section Two</h2>
+  </body>
+</html>"#,
+        );
+        write_zip_file(
+            &mut writer,
+            options,
+            "OEBPS/toc.ncx",
+            r#"<?xml version="1.0"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/">
+  <navMap>
+    <navPoint id="chapter-one">
+      <navLabel><text>Chapter One</text></navLabel>
+      <content src="chapter1.xhtml#chapter-one"/>
+      <navPoint id="section-two">
+        <navLabel><text>Section Two</text></navLabel>
+        <content src="chapter1.xhtml#section-two"/>
+      </navPoint>
+    </navPoint>
+  </navMap>
+</ncx>"#,
+        );
+
+        writer.finish().expect("finish epub");
     }
 
     fn write_minimal_epub_without_image_file(path: &Path, chapter_xhtml: &str) {
