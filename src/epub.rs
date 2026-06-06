@@ -69,6 +69,12 @@ pub fn open_with_issue_logger(
         load_image_data(&mut archive, &mut parsed_chapter.blocks, &mut log_issue);
 
         target_blocks_by_href.insert(chapter_path.clone(), start_block);
+        for (fragment, relative_block_index) in &parsed_chapter.fragment_targets {
+            target_blocks_by_href.insert(
+                format!("{chapter_path}#{fragment}"),
+                start_block + relative_block_index,
+            );
+        }
         blocks.extend(parsed_chapter.blocks);
         annotations.extend(parsed_chapter.annotations);
 
@@ -106,7 +112,7 @@ pub fn open_with_issue_logger(
     let toc = if let Some(nav_item) = package.nav_item() {
         let nav_path = join_zip_path(&opf_base, &nav_item.href);
         match read_zip_text(&mut archive, &nav_path) {
-            Ok(nav_xml) => match parse_toc(&nav_xml, &opf_base, &target_blocks_by_href) {
+            Ok(nav_xml) => match parse_toc(&nav_xml, &nav_path, &target_blocks_by_href) {
                 Ok(toc) => toc,
                 Err(error) => {
                     log_issue(&format!("malformed HTML: {nav_path}: {error}"));
@@ -152,6 +158,7 @@ struct ManifestItem {
 struct ParsedChapter {
     blocks: Vec<Block>,
     annotations: AnnotationStore,
+    fragment_targets: HashMap<String, usize>,
 }
 
 const EXPLICIT_LINE_BREAK: char = '\u{0}';
@@ -164,6 +171,7 @@ fn malformed_chapter_placeholder(chapter_path: &str, chapter_index: usize) -> Pa
             annotations: Vec::new(),
         })],
         annotations: AnnotationStore::new(),
+        fragment_targets: HashMap::new(),
     }
 }
 
@@ -272,6 +280,7 @@ fn parse_xhtml_chapter(
         .map_err(|error| EpubError(format!("invalid XHTML chapter: {error}")))?;
     let mut blocks = Vec::new();
     let annotations = annotations_from_document(&document, chapter_path);
+    let mut fragment_targets = HashMap::new();
 
     append_chapter_blocks(
         document.root_element(),
@@ -279,11 +288,13 @@ fn parse_xhtml_chapter(
         chapter_path,
         chapter_base,
         &mut blocks,
+        &mut fragment_targets,
     );
 
     Ok(ParsedChapter {
         blocks,
         annotations,
+        fragment_targets,
     })
 }
 
@@ -321,7 +332,7 @@ fn annotations_from_document(
 
 fn parse_toc(
     nav_xml: &str,
-    opf_base: &str,
+    nav_path: &str,
     target_blocks_by_href: &HashMap<String, usize>,
 ) -> Result<Vec<TocNode>, EpubError> {
     let document = roxmltree::Document::parse(nav_xml)
@@ -339,7 +350,11 @@ fn parse_toc(
         return Ok(Vec::new());
     };
 
-    Ok(parse_toc_list(root_list, opf_base, target_blocks_by_href))
+    Ok(parse_toc_list(
+        root_list,
+        nav_path,
+        target_blocks_by_href,
+    ))
 }
 
 fn is_toc_nav(node: roxmltree::Node<'_, '_>) -> bool {
@@ -355,27 +370,26 @@ fn is_toc_nav(node: roxmltree::Node<'_, '_>) -> bool {
 
 fn parse_toc_list(
     list: roxmltree::Node<'_, '_>,
-    opf_base: &str,
+    nav_path: &str,
     target_blocks_by_href: &HashMap<String, usize>,
 ) -> Vec<TocNode> {
     list.children()
         .filter(|node| node.is_element() && node.tag_name().name() == "li")
-        .filter_map(|node| parse_toc_item(node, opf_base, target_blocks_by_href))
+        .filter_map(|node| parse_toc_item(node, nav_path, target_blocks_by_href))
         .collect()
 }
 
 fn parse_toc_item(
     item: roxmltree::Node<'_, '_>,
-    opf_base: &str,
+    nav_path: &str,
     target_blocks_by_href: &HashMap<String, usize>,
 ) -> Option<TocNode> {
     let link = item
         .children()
         .find(|node| node.is_element() && node.tag_name().name() == "a")?;
     let href = link.attribute("href")?;
-    let href_without_fragment = href.split('#').next().unwrap_or(href);
-    let target_path = join_zip_path(opf_base, href_without_fragment);
-    let target_block_index = *target_blocks_by_href.get(&target_path)?;
+    let target_key = resolve_href(nav_path, href);
+    let target_block_index = *target_blocks_by_href.get(&target_key)?;
     let title = normalized_descendant_text(link);
 
     if title.is_empty() {
@@ -385,7 +399,7 @@ fn parse_toc_item(
     let children = item
         .children()
         .find(|node| node.is_element() && node.tag_name().name() == "ol")
-        .map(|list| parse_toc_list(list, opf_base, target_blocks_by_href))
+        .map(|list| parse_toc_list(list, nav_path, target_blocks_by_href))
         .unwrap_or_default();
 
     Some(TocNode {
@@ -409,6 +423,7 @@ fn append_chapter_blocks(
     chapter_path: &str,
     chapter_base: &str,
     blocks: &mut Vec<Block>,
+    fragment_targets: &mut HashMap<String, usize>,
 ) {
     for child in node.children().filter(|child| child.is_element()) {
         if is_annotation_container(child) || has_annotation_ancestor(child) {
@@ -416,11 +431,14 @@ fn append_chapter_blocks(
         }
 
         if is_text_block_element(child.tag_name().name()) {
+            let block_offset = blocks.len();
             blocks.extend(blocks_from_xhtml_element(
                 child,
                 chapter_index,
                 chapter_path,
                 chapter_base,
+                block_offset,
+                fragment_targets,
             ));
         } else {
             append_chapter_blocks(
@@ -429,6 +447,7 @@ fn append_chapter_blocks(
                 chapter_path,
                 chapter_base,
                 blocks,
+                fragment_targets,
             );
         }
     }
@@ -527,6 +546,8 @@ fn blocks_from_xhtml_element(
     chapter_index: usize,
     chapter_path: &str,
     chapter_base: &str,
+    block_offset: usize,
+    fragment_targets: &mut HashMap<String, usize>,
 ) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut text = String::new();
@@ -537,11 +558,19 @@ fn blocks_from_xhtml_element(
         chapter_index,
         chapter_path,
         chapter_base,
+        block_offset,
         &mut blocks,
         &mut text,
         &mut annotation_refs,
+        fragment_targets,
     );
     flush_text_block(&mut blocks, chapter_index, &mut text, &mut annotation_refs);
+
+    if !blocks.is_empty() {
+        if let Some(id) = node.attribute("id") {
+            fragment_targets.insert(id.to_string(), block_offset);
+        }
+    }
 
     blocks
 }
@@ -551,9 +580,11 @@ fn append_visible_blocks(
     chapter_index: usize,
     chapter_path: &str,
     chapter_base: &str,
+    block_offset: usize,
     blocks: &mut Vec<Block>,
     text: &mut String,
     annotation_refs: &mut Vec<AnnotationRef>,
+    fragment_targets: &mut HashMap<String, usize>,
 ) {
     for child in node.children() {
         if child.is_text() {
@@ -572,11 +603,14 @@ fn append_visible_blocks(
 
             if is_text_block_element(child.tag_name().name()) {
                 flush_text_block(blocks, chapter_index, text, annotation_refs);
+                let child_block_offset = block_offset + blocks.len();
                 blocks.extend(blocks_from_xhtml_element(
                     child,
                     chapter_index,
                     chapter_path,
                     chapter_base,
+                    child_block_offset,
+                    fragment_targets,
                 ));
                 continue;
             }
@@ -609,9 +643,11 @@ fn append_visible_blocks(
                 chapter_index,
                 chapter_path,
                 chapter_base,
+                block_offset,
                 blocks,
                 text,
                 annotation_refs,
+                fragment_targets,
             );
         }
     }
@@ -637,6 +673,23 @@ fn annotation_key_from_href(
 
 fn annotation_key(document_path: &str, id: &str) -> String {
     format!("{document_path}#{id}")
+}
+
+fn resolve_href(source_path: &str, href: &str) -> String {
+    let (target, fragment) = href
+        .split_once('#')
+        .map_or((href, None), |(target, fragment)| (target, Some(fragment)));
+    let target_path = if target.is_empty() {
+        source_path.to_string()
+    } else {
+        join_zip_path(&zip_parent(source_path), target)
+    };
+
+    fragment
+        .filter(|fragment| !fragment.is_empty())
+        .map_or(target_path.clone(), |fragment| {
+            format!("{target_path}#{fragment}")
+        })
 }
 
 fn flush_text_block(
@@ -1654,6 +1707,44 @@ mod tests {
         assert_eq!(document.toc[0].children.len(), 1);
         assert_eq!(document.toc[0].children[0].title, "Section One");
         assert_eq!(document.toc[0].children[0].target_block_index, 1);
+    }
+
+    #[test]
+    fn resolves_toc_fragments_to_blocks_within_a_chapter() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <h1 id="chapter-one">Chapter One</h1>
+    <p>Opening paragraph.</p>
+    <h2 id="section-two">Section Two</h2>
+  </body>
+</html>"#,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol>
+        <li><a href="chapter1.xhtml#chapter-one">Chapter One</a></li>
+        <li><a href="chapter1.xhtml#section-two">Section Two</a></li>
+      </ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(document.toc[0].target_block_index, 0);
+        assert_eq!(document.toc[1].target_block_index, 2);
     }
 
     #[test]
