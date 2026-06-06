@@ -30,7 +30,11 @@ impl ProgressStore {
     }
 
     pub fn save(&self, book_path: &Path, progress: Progress) -> io::Result<()> {
-        let mut progress_by_book = self.load_all()?;
+        let mut progress_by_book = match self.load_all() {
+            Ok(progress_by_book) => progress_by_book,
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => HashMap::new(),
+            Err(error) => return Err(error),
+        };
         progress_by_book.insert(book_path.to_string_lossy().into_owned(), progress);
 
         if let Some(parent) = self.path.parent() {
@@ -49,7 +53,8 @@ impl ProgressStore {
 
     fn load_all(&self) -> io::Result<HashMap<String, Progress>> {
         match fs::read_to_string(&self.path) {
-            Ok(contents) => serde_json::from_str(&contents).map_err(io::Error::other),
+            Ok(contents) => serde_json::from_str(&contents)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
             Err(error) => Err(error),
         }
@@ -130,6 +135,29 @@ mod tests {
         assert_eq!(
             store.load(second_book).expect("load second progress"),
             Some(second_progress)
+        );
+    }
+
+    #[test]
+    fn saving_replaces_malformed_progress_file() {
+        let tempdir = tempdir().expect("temp dir");
+        let progress_path = tempdir.path().join("progress.json");
+        std::fs::write(&progress_path, "{broken json").expect("write malformed progress");
+        let store = ProgressStore::new(progress_path);
+        let book_path = Path::new("/books/example.epub");
+        let progress = Progress {
+            block_index: 7,
+            sentence_offset: 11,
+            timestamp: "2026-06-06T12:00:00Z".to_string(),
+        };
+
+        store
+            .save(book_path, progress.clone())
+            .expect("replace malformed progress");
+
+        assert_eq!(
+            store.load(book_path).expect("load replacement progress"),
+            Some(progress)
         );
     }
 
