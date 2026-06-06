@@ -35,7 +35,7 @@ impl ProgressStore {
             Err(error) if error.kind() == io::ErrorKind::InvalidData => HashMap::new(),
             Err(error) => return Err(error),
         };
-        progress_by_book.insert(book_path.to_string_lossy().into_owned(), progress);
+        progress_by_book.insert(progress_key(book_path), progress);
 
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
@@ -46,9 +46,7 @@ impl ProgressStore {
     }
 
     pub fn load(&self, book_path: &Path) -> io::Result<Option<Progress>> {
-        Ok(self
-            .load_all()?
-            .remove(book_path.to_string_lossy().as_ref()))
+        Ok(self.load_all()?.remove(&progress_key(book_path)))
     }
 
     fn load_all(&self) -> io::Result<HashMap<String, Progress>> {
@@ -59,6 +57,13 @@ impl ProgressStore {
             Err(error) => Err(error),
         }
     }
+}
+
+fn progress_key(book_path: &Path) -> String {
+    fs::canonicalize(book_path)
+        .unwrap_or_else(|_| book_path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub fn progress_path_from_env(
@@ -135,6 +140,30 @@ mod tests {
         assert_eq!(
             store.load(second_book).expect("load second progress"),
             Some(second_progress)
+        );
+    }
+
+    #[test]
+    fn equivalent_existing_book_paths_share_progress() {
+        let tempdir = tempdir().expect("temp dir");
+        let book_path = tempdir.path().join("book.epub");
+        std::fs::write(&book_path, "book").expect("write book");
+        std::fs::create_dir(tempdir.path().join("subdir")).expect("create subdir");
+        let aliased_book_path = tempdir.path().join("subdir/../book.epub");
+        let store = ProgressStore::new(tempdir.path().join("progress.json"));
+        let progress = Progress {
+            block_index: 5,
+            sentence_offset: 8,
+            timestamp: "2026-06-06T12:00:00Z".to_string(),
+        };
+
+        store
+            .save(&aliased_book_path, progress.clone())
+            .expect("save progress");
+
+        assert_eq!(
+            store.load(&book_path).expect("load progress"),
+            Some(progress)
         );
     }
 
