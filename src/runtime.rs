@@ -181,7 +181,15 @@ where
     let mut pending_progress = None;
 
     loop {
-        match events.next_event()? {
+        let event = match events.next_event() {
+            Ok(event) => event,
+            Err(error) => {
+                flush_pending_progress(&mut pending_progress, &mut save_progress)?;
+                return Err(error);
+            }
+        };
+
+        match event {
             RuntimeEvent::Terminal(crossterm::event::Event::Key(key)) => {
                 let action = map_key(app.focus(), key);
                 if action == Action::Quit {
@@ -856,6 +864,58 @@ mod tests {
         )
         .expect("run terminal event loop");
 
+        assert_eq!(
+            saved_progress,
+            vec![Progress {
+                block_index: 0,
+                sentence_offset: "First.".len(),
+                timestamp: "2026-06-04T12:00:00Z".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn terminal_event_loop_flushes_progress_before_event_source_error() {
+        let mut app = build_app(
+            Path::new("/books/book.epub"),
+            |_| {
+                Ok(Document {
+                    blocks: vec![Block::Text(TextBlock {
+                        text: "First. Second.".to_string(),
+                        chapter_index: 0,
+                        annotations: Vec::new(),
+                    })],
+                    toc: Vec::new(),
+                    annotations: HashMap::new(),
+                    chapter_ranges: Vec::new(),
+                })
+            },
+            |_| Ok(None),
+        )
+        .expect("build app");
+        let backend = TestBackend::new(40, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut events = VecEventSource {
+            events: vec![terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('j'),
+                KeyModifiers::NONE,
+            )))],
+        };
+        let mut saved_progress = Vec::new();
+
+        let error = super::run_terminal_event_loop_with_progress(
+            &mut terminal,
+            &mut app,
+            &mut events,
+            || "2026-06-04T12:00:00Z".to_string(),
+            |progress| {
+                saved_progress.push(progress);
+                Ok(())
+            },
+        )
+        .expect_err("event source should fail");
+
+        assert_eq!(error.to_string(), "no more events");
         assert_eq!(
             saved_progress,
             vec![Progress {
