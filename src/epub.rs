@@ -109,7 +109,8 @@ pub fn open_with_issue_logger(
         }
     }
 
-    let toc = if let Some((toc_item, format)) = package.toc_item() {
+    let mut toc = Vec::new();
+    for (toc_item, format) in package.toc_items() {
         let toc_path = join_zip_path(&opf_base, &toc_item.href);
         match read_zip_text(&mut archive, &toc_path) {
             Ok(toc_xml) => {
@@ -118,21 +119,21 @@ pub fn open_with_issue_logger(
                     TocFormat::Ncx => parse_ncx(&toc_xml, &toc_path, &target_blocks_by_href),
                 };
                 match parsed_toc {
-                    Ok(toc) => toc,
+                    Ok(candidate) if !candidate.is_empty() => {
+                        toc = candidate;
+                        break;
+                    }
+                    Ok(_) => {}
                     Err(error) => {
                         log_issue(&format!("malformed HTML: {toc_path}: {error}"));
-                        Vec::new()
                     }
                 }
             }
             Err(error) => {
                 log_issue(&format!("malformed HTML: {toc_path}: {error}"));
-                Vec::new()
             }
         }
-    } else {
-        Vec::new()
-    };
+    }
 
     Ok(Document {
         blocks,
@@ -149,24 +150,30 @@ struct Package {
 }
 
 impl Package {
-    fn toc_item(&self) -> Option<(&ManifestItem, TocFormat)> {
+    fn toc_items(&self) -> Vec<(&ManifestItem, TocFormat)> {
+        let mut items = Vec::new();
         if let Some(nav_item) = self
             .manifest
             .values()
             .find(|item| item.properties.split_whitespace().any(|value| value == "nav"))
         {
-            return Some((nav_item, TocFormat::Nav));
+            items.push((nav_item, TocFormat::Nav));
         }
 
-        self.spine_toc_id
+        let ncx_item = self
+            .spine_toc_id
             .as_ref()
             .and_then(|id| self.manifest.get(id))
             .or_else(|| {
                 self.manifest
                     .values()
                     .find(|item| item.media_type == "application/x-dtbncx+xml")
-            })
-            .map(|item| (item, TocFormat::Ncx))
+            });
+        if let Some(ncx_item) = ncx_item {
+            items.push((ncx_item, TocFormat::Ncx));
+        }
+
+        items
     }
 }
 
@@ -1652,6 +1659,54 @@ mod tests {
             Block::Text(block) if block.text == "Readable chapter."
         ));
         assert!(document.toc.is_empty());
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("malformed HTML: OEBPS/nav.xhtml"));
+    }
+
+    #[test]
+    fn malformed_nav_falls_back_to_valid_ncx() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_extra_files(
+            &epub_path,
+            &[(
+                "chapter1",
+                "chapter1.xhtml",
+                r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><p>Readable chapter.</p></body>
+</html>"#,
+            )],
+            &[(
+                "ncx",
+                "toc.ncx",
+                "application/x-dtbncx+xml",
+                r#"<?xml version="1.0"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/">
+  <navMap>
+    <navPoint id="chapter-one">
+      <navLabel><text>Chapter One</text></navLabel>
+      <content src="chapter1.xhtml"/>
+    </navPoint>
+  </navMap>
+</ncx>"#,
+            )],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><nav><ol><li>Broken
+</html>"#,
+            None,
+        );
+        let mut issues = Vec::new();
+
+        let document = super::open_with_issue_logger(&epub_path, |issue| {
+            issues.push(issue.to_string());
+        })
+        .expect("parse EPUB with NCX fallback");
+
+        assert_eq!(document.toc.len(), 1);
+        assert_eq!(document.toc[0].title, "Chapter One");
+        assert_eq!(document.toc[0].target_block_index, 0);
         assert_eq!(issues.len(), 1);
         assert!(issues[0].contains("malformed HTML: OEBPS/nav.xhtml"));
     }
