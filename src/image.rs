@@ -86,11 +86,25 @@ pub fn select_image_mode(mode: ImageMode, support: ImageModeSupport) -> Selected
     }
 }
 
+pub fn resolve_image_mode(
+    mode: ImageMode,
+    detect_support: impl FnOnce() -> ImageModeSupport,
+) -> SelectedImageMode {
+    match mode {
+        ImageMode::Auto => select_image_mode(mode, detect_support()),
+        ImageMode::Sixel | ImageMode::Halfblock | ImageMode::Off => {
+            select_image_mode(mode, ImageModeSupport::terminal_default())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use crate::cli::ImageMode;
 
-    use super::{select_image_mode, ImageModeSupport, SelectedImageMode};
+    use super::{resolve_image_mode, select_image_mode, ImageModeSupport, SelectedImageMode};
 
     #[test]
     fn auto_prefers_sixel_when_supported() {
@@ -135,6 +149,19 @@ mod tests {
         );
 
         assert_eq!(selected, SelectedImageMode::Off);
+    }
+
+    #[test]
+    fn explicit_image_mode_does_not_query_terminal_support() {
+        let detector_called = Cell::new(false);
+
+        let selected = resolve_image_mode(ImageMode::Off, || {
+            detector_called.set(true);
+            ImageModeSupport::terminal_default()
+        });
+
+        assert_eq!(selected, SelectedImageMode::Off);
+        assert!(!detector_called.get());
     }
 
     #[test]
