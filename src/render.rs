@@ -55,77 +55,131 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
 fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
     let document = app.document();
     let position = app.position();
+    let chapter_range = document
+        .chapter_range_for_block(position.block_index)
+        .map(|range| range.start_block..=range.end_block)
+        .unwrap_or(position.block_index..=position.block_index);
+    let mut lines = Vec::new();
 
-    match document.blocks.get(position.block_index) {
-        Some(Block::Text(block)) => {
-            let mut lines = vec![Vec::new()];
-            let mut cursor = 0;
-            for range in segment_sentences(&block.text) {
-                if cursor < range.0 {
+    for block_index in chapter_range {
+        match document.blocks.get(block_index) {
+            Some(Block::Text(block)) => {
+                let mut block_lines = vec![Vec::new()];
+                let highlighted_sentence_offset =
+                    (block_index == position.block_index).then_some(position.sentence_offset);
+                let mut cursor = 0;
+                for range in segment_sentences(&block.text) {
+                    if cursor < range.0 {
+                        push_text_span_lines(
+                            &mut block_lines,
+                            block.text[cursor..range.0].to_string(),
+                            Style::default(),
+                        );
+                    }
+
+                    let sentence = block.text[range.0..range.1].to_string();
+                    let style = if highlighted_sentence_offset == Some(range.0) {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    push_text_span_lines(&mut block_lines, sentence, style);
+                    cursor = range.1;
+                }
+
+                if cursor < block.text.len() {
                     push_text_span_lines(
-                        &mut lines,
-                        block.text[cursor..range.0].to_string(),
+                        &mut block_lines,
+                        block.text[cursor..].to_string(),
                         Style::default(),
                     );
                 }
 
-                let sentence = block.text[range.0..range.1].to_string();
-                if range.0 == position.sentence_offset {
-                    push_text_span_lines(
-                        &mut lines,
-                        sentence,
-                        Style::default().add_modifier(Modifier::REVERSED),
-                    );
-                } else {
-                    push_text_span_lines(&mut lines, sentence, Style::default());
-                }
-                cursor = range.1;
+                lines.extend(block_lines.into_iter().map(Line::from));
             }
-
-            if cursor < block.text.len() {
-                push_text_span_lines(
-                    &mut lines,
-                    block.text[cursor..].to_string(),
-                    Style::default(),
-                );
+            Some(Block::Image(image)) => {
+                lines.extend(image_content_lines(image, app.image_mode(), content));
             }
-
-            lines.into_iter().map(Line::from).collect()
+            None => {}
         }
-        Some(Block::Image(image)) => {
-            let label = image.alt_text.as_deref().unwrap_or("untitled");
-            match app.image_mode() {
-                SelectedImageMode::Off => vec![Line::from(format!("[image disabled: {label}]"))],
-                SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel
-                    if image.data.is_none() && image.source_path.is_some() =>
-                {
-                    vec![Line::from(format!("[image unavailable: {label}]"))]
-                }
-                SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel
-                    if image
-                        .data
-                        .as_deref()
-                        .is_some_and(|data| ::image::load_from_memory(data).is_err()) =>
-                {
-                    vec![Line::from(format!("[image unavailable: {label}]"))]
-                }
-                SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel => {
-                    vec![Line::from(format!("[image: {label}]"))]
-                }
-                SelectedImageMode::Halfblock => {
-                    match image.data.as_deref() {
-                        Some(data) => render_halfblock_image(data, content.width, content.height)
-                            .unwrap_or_else(|| vec![Line::from(format!("[image unavailable: {label}]"))]),
-                        None if image.source_path.is_some() => {
-                            vec![Line::from(format!("[image unavailable: {label}]"))]
-                        }
-                        None => vec![Line::from(format!("[image: {label}]"))],
-                    }
-                }
-            }
-        }
-        None => vec![Line::default()],
     }
+
+    if lines.is_empty() {
+        lines.push(Line::default());
+    }
+
+    lines
+}
+
+fn image_content_lines(
+    image: &crate::document::ImageBlock,
+    image_mode: SelectedImageMode,
+    content: Rect,
+) -> Vec<Line<'static>> {
+    let label = image.alt_text.as_deref().unwrap_or("untitled");
+    match image_mode {
+        SelectedImageMode::Off => vec![Line::from(format!("[image disabled: {label}]"))],
+        SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel
+            if image.data.is_none() && image.source_path.is_some() =>
+        {
+            vec![Line::from(format!("[image unavailable: {label}]"))]
+        }
+        SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel
+            if image
+                .data
+                .as_deref()
+                .is_some_and(|data| ::image::load_from_memory(data).is_err()) =>
+        {
+            vec![Line::from(format!("[image unavailable: {label}]"))]
+        }
+        SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel => {
+            vec![Line::from(format!("[image: {label}]"))]
+        }
+        SelectedImageMode::Halfblock => match image.data.as_deref() {
+            Some(data) => render_halfblock_image(data, content.width, content.height)
+                .unwrap_or_else(|| vec![Line::from(format!("[image unavailable: {label}]"))]),
+            None if image.source_path.is_some() => {
+                vec![Line::from(format!("[image unavailable: {label}]"))]
+            }
+            None => vec![Line::from(format!("[image: {label}]"))],
+        },
+    }
+}
+
+fn text_block_screen_rows(text: &str, width: u16) -> u16 {
+    let width = usize::from(width.max(1));
+    let mut rows = 1usize;
+    let mut column = 0usize;
+
+    for character in text.chars() {
+        if character == '\n' {
+            rows += 1;
+            column = 0;
+            continue;
+        }
+
+        let character_width = character.width().unwrap_or(0);
+        if character_width == 0 {
+            continue;
+        }
+
+        if column + character_width > width {
+            rows += 1;
+            column = 0;
+        }
+
+        column += character_width;
+        if column == width {
+            column = 0;
+            rows += 1;
+        }
+    }
+
+    if column == 0 && rows > 1 && !text.ends_with('\n') {
+        rows -= 1;
+    }
+
+    rows.min(u16::MAX as usize) as u16
 }
 
 fn push_text_span_lines(lines: &mut Vec<Vec<Span<'static>>>, text: String, style: Style) {
@@ -338,7 +392,7 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, content: Rect, app: &
     let y = if is_immersed {
         content.y
     } else {
-        let sentence_row = current_sentence_screen_row(app, content.width).unwrap_or(0);
+        let sentence_row = current_sentence_screen_row(app, content).unwrap_or(0);
         let visible_sentence_row =
             sentence_row.saturating_sub(content_scroll_offset(app, content));
         content.y + visible_sentence_row.saturating_sub(height)
@@ -362,7 +416,7 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, content: Rect, app: &
     frame.render_widget(paragraph, area);
 }
 
-fn current_sentence_screen_row(app: &App, width: u16) -> Option<u16> {
+fn current_sentence_screen_row(app: &App, content: Rect) -> Option<u16> {
     let position = app.position();
     let block = app.document().text_block(position.block_index)?;
     let sentence_range = segment_sentences(&block.text)
@@ -372,12 +426,28 @@ fn current_sentence_screen_row(app: &App, width: u16) -> Option<u16> {
     let visible_sentence = sentence.trim_start_matches(char::is_whitespace);
     let visible_start = sentence_range.1 - visible_sentence.len();
     let prefix = block.text.get(..visible_start)?;
+    let chapter_start = app
+        .document()
+        .chapter_range_for_block(position.block_index)
+        .map(|range| range.start_block)
+        .unwrap_or(position.block_index);
+    let preceding_rows = app.document().blocks[chapter_start..position.block_index]
+        .iter()
+        .map(|block| match block {
+            Block::Text(block) => text_block_screen_rows(&block.text, content.width),
+            Block::Image(image) => {
+                image_content_lines(image, app.image_mode(), content).len() as u16
+            }
+        })
+        .fold(0u16, u16::saturating_add);
 
-    Some(wrapped_row_for_prefix(prefix, width))
+    Some(
+        preceding_rows.saturating_add(wrapped_row_for_prefix(prefix, content.width)),
+    )
 }
 
 fn content_scroll_offset(app: &App, content: Rect) -> u16 {
-    let Some(sentence_row) = current_sentence_screen_row(app, content.width) else {
+    let Some(sentence_row) = current_sentence_screen_row(app, content) else {
         return 0;
     };
 
