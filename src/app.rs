@@ -30,6 +30,7 @@ pub struct App {
     selected_annotation_index: usize,
     annotation_scroll: usize,
     annotation_text_width: usize,
+    annotation_viewport_height: usize,
 }
 
 impl App {
@@ -47,6 +48,7 @@ impl App {
             selected_annotation_index: 0,
             annotation_scroll: 0,
             annotation_text_width: DEFAULT_ANNOTATION_TEXT_WIDTH,
+            annotation_viewport_height: 1,
         }
     }
 
@@ -80,6 +82,7 @@ impl App {
             selected_annotation_index: 0,
             annotation_scroll: 0,
             annotation_text_width: DEFAULT_ANNOTATION_TEXT_WIDTH,
+            annotation_viewport_height: 1,
         }
     }
 
@@ -155,6 +158,15 @@ impl App {
             usize::from(terminal_width.min(50).saturating_sub(2).max(1));
     }
 
+    pub fn set_terminal_size(&mut self, terminal_width: u16, terminal_height: u16) {
+        self.set_terminal_width(terminal_width);
+        self.annotation_viewport_height = usize::from(terminal_height.saturating_sub(3).max(1));
+        let max_scroll = self
+            .current_annotation_line_count()
+            .saturating_sub(self.annotation_viewport_height);
+        self.annotation_scroll = self.annotation_scroll.min(max_scroll);
+    }
+
     pub fn is_toc_path_collapsed(&self, path: &[usize]) -> bool {
         self.collapsed_toc_paths.iter().any(|collapsed_path| collapsed_path == path)
     }
@@ -199,13 +211,14 @@ impl App {
             Action::ImmerseAnnotation => {
                 if self.focus == Focus::AnnotationOverlay
                     && self.current_sentence_annotation_count() > 0
+                    && self.current_annotation_line_count() > 1
                 {
                     self.focus = Focus::AnnotationImmersed;
                     self.annotation_scroll = 0;
                 }
             }
             Action::ExitAnnotationImmersion => {
-                self.focus = Focus::Content;
+                self.focus = Focus::AnnotationOverlay;
                 self.annotation_scroll = 0;
             }
             Action::CloseAnnotationOverlay => {
@@ -443,13 +456,35 @@ impl App {
     }
 
     fn scroll_annotation_down(&mut self) {
-        let max_scroll = self.current_annotation_line_count().saturating_sub(1);
+        let max_scroll = self
+            .current_annotation_line_count()
+            .saturating_sub(self.annotation_viewport_height);
         self.annotation_scroll = (self.annotation_scroll + 1).min(max_scroll);
     }
 
     fn current_annotation_line_count(&self) -> usize {
+        let annotation_count = self.current_sentence_annotation_count();
+        let prefix_width = if annotation_count > 1 {
+            UnicodeWidthStr::width(
+                format!(
+                    "[{}/{}] ",
+                    self.selected_annotation_index + 1,
+                    annotation_count
+                )
+                .as_str(),
+            )
+        } else {
+            0
+        };
+
         self.current_annotation_text()
-            .map(|text| annotation_display_line_count(text, self.annotation_text_width))
+            .map(|text| {
+                annotation_display_line_count(
+                    text,
+                    self.annotation_text_width,
+                    prefix_width,
+                )
+            })
             .unwrap_or(0)
     }
 
@@ -492,10 +527,16 @@ impl App {
     }
 }
 
-fn annotation_display_line_count(text: &str, width: usize) -> usize {
+fn annotation_display_line_count(text: &str, width: usize, first_line_prefix_width: usize) -> usize {
     text.lines()
-        .map(|line| {
-            UnicodeWidthStr::width(line)
+        .enumerate()
+        .map(|(index, line)| {
+            (UnicodeWidthStr::width(line)
+                + if index == 0 {
+                    first_line_prefix_width
+                } else {
+                    0
+                })
                 .max(1)
                 .div_ceil(width.max(1))
         })
@@ -888,7 +929,7 @@ mod tests {
         let mut app = App::new(Document {
             blocks: vec![annotated_text_block("First [1].", "note-1", "First ".len())],
             toc: Vec::new(),
-            annotations: annotation_map("note-1", "Note."),
+            annotations: annotation_map("note-1", "First note line\nSecond note line"),
             chapter_ranges: Vec::new(),
         });
 
@@ -907,6 +948,9 @@ mod tests {
         assert_eq!(app.focus(), Focus::AnnotationImmersed);
 
         app.apply(Action::ExitAnnotationImmersion);
+        assert_eq!(app.focus(), Focus::AnnotationOverlay);
+
+        app.apply(Action::CloseAnnotationOverlay);
         assert_eq!(app.focus(), Focus::Content);
     }
 

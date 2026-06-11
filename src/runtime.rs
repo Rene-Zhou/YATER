@@ -107,7 +107,7 @@ pub fn run_terminal_loop<B: ratatui::backend::Backend>(
     app: &mut App,
     keys: impl IntoIterator<Item = crossterm::event::KeyEvent>,
 ) -> Result<(), RuntimeError> {
-    sync_terminal_width(terminal, app)?;
+    sync_terminal_size(terminal, app)?;
     terminal
         .draw(|frame| render::draw(frame, app))
         .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -173,7 +173,7 @@ where
     B: ratatui::backend::Backend,
     E: EventSource,
 {
-    sync_terminal_width(terminal, app)?;
+    sync_terminal_size(terminal, app)?;
     terminal
         .draw(|frame| render::draw(frame, app))
         .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -209,8 +209,8 @@ where
                     return Err(RuntimeError::new(error.to_string()));
                 }
             }
-            RuntimeEvent::Terminal(crossterm::event::Event::Resize(width, _)) => {
-                app.set_terminal_width(width);
+            RuntimeEvent::Terminal(crossterm::event::Event::Resize(width, height)) => {
+                app.set_terminal_size(width, height);
                 terminal
                     .draw(|frame| render::draw(frame, app))
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -246,7 +246,7 @@ where
     B: ratatui::backend::Backend,
     E: EventSource,
 {
-    sync_terminal_width(terminal, app)?;
+    sync_terminal_size(terminal, app)?;
     terminal
         .draw(|frame| render::draw(frame, app))
         .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -262,8 +262,8 @@ where
                     .draw(|frame| render::draw(frame, app))
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
             }
-            RuntimeEvent::Terminal(crossterm::event::Event::Resize(width, _)) => {
-                app.set_terminal_width(width);
+            RuntimeEvent::Terminal(crossterm::event::Event::Resize(width, height)) => {
+                app.set_terminal_size(width, height);
                 terminal
                     .draw(|frame| render::draw(frame, app))
                     .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -275,14 +275,14 @@ where
     Ok(())
 }
 
-fn sync_terminal_width<B: ratatui::backend::Backend>(
+fn sync_terminal_size<B: ratatui::backend::Backend>(
     terminal: &ratatui::Terminal<B>,
     app: &mut App,
 ) -> Result<(), RuntimeError> {
     let size = terminal
         .size()
         .map_err(|error| RuntimeError::new(error.to_string()))?;
-    app.set_terminal_width(size.width);
+    app.set_terminal_size(size.width, size.height);
     Ok(())
 }
 
@@ -718,7 +718,7 @@ mod tests {
             )]),
             chapter_ranges: Vec::new(),
         });
-        let backend = TestBackend::new(20, 6);
+        let backend = TestBackend::new(20, 4);
         let mut terminal = Terminal::new(backend).expect("terminal");
 
         super::run_terminal_loop(

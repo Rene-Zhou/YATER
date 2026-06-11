@@ -22,6 +22,7 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .areas(area);
+    let (reading_content, annotation_area) = annotation_layout(app, content);
 
     let document = app.document();
     let position = app.position();
@@ -30,13 +31,13 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         .unwrap_or("");
     frame.render_widget(Paragraph::new(chapter_title).centered(), top_bar);
 
-    if !draw_current_image(frame, content, app) {
-        let scroll = content_scroll_offset(app, content);
+    if !draw_current_image(frame, reading_content, app) {
+        let scroll = content_scroll_offset(app, reading_content);
         frame.render_widget(
-            Paragraph::new(current_content_lines(app, content))
+            Paragraph::new(current_content_lines(app, reading_content))
                 .wrap(Wrap { trim: false })
                 .scroll((scroll, 0)),
-            content,
+            reading_content,
         );
     }
 
@@ -48,7 +49,7 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         app.focus(),
         Focus::AnnotationOverlay | Focus::AnnotationImmersed
     ) {
-        draw_annotation_overlay(frame, content, app);
+        draw_annotation_overlay(frame, annotation_area, app);
     }
 }
 
@@ -378,31 +379,38 @@ fn append_toc_rows<'a>(
     }
 }
 
-fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) {
+fn annotation_layout(app: &App, content: Rect) -> (Rect, Rect) {
+    if app.focus() != Focus::AnnotationOverlay {
+        return (content, content);
+    }
+
+    let overlay_height = 3.min(content.height);
+    let sentence_row = current_sentence_screen_row(app, content).unwrap_or(0);
+    let visible_sentence_row = sentence_row.saturating_sub(content_scroll_offset(app, content));
+    let clearance = overlay_height.saturating_sub(visible_sentence_row);
+    let reading_content = Rect {
+        y: content.y.saturating_add(clearance),
+        height: content.height.saturating_sub(clearance),
+        ..content
+    };
+    let annotation_area = Rect {
+        x: content.x,
+        y: reading_content
+            .y
+            .saturating_add(visible_sentence_row)
+            .saturating_sub(overlay_height),
+        width: content.width.min(50),
+        height: overlay_height,
+    };
+
+    (reading_content, annotation_area)
+}
+
+fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     let Some(annotation) = current_annotation(app) else {
         return;
     };
     let is_immersed = app.focus() == Focus::AnnotationImmersed;
-    let height = if is_immersed {
-        content.height
-    } else {
-        3.min(content.height)
-    };
-    let width = content.width.min(50);
-    let y = if is_immersed {
-        content.y
-    } else {
-        let sentence_row = current_sentence_screen_row(app, content).unwrap_or(0);
-        let visible_sentence_row =
-            sentence_row.saturating_sub(content_scroll_offset(app, content));
-        content.y + visible_sentence_row.saturating_sub(height)
-    };
-    let area = Rect {
-        x: content.x,
-        y,
-        width,
-        height,
-    };
     let annotation_text = annotation.display_text();
     let mut paragraph =
         Paragraph::new(annotation_text).block(WidgetBlock::default().borders(Borders::ALL));

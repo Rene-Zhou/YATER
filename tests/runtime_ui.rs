@@ -1,13 +1,17 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;
 use ratatui::Terminal;
 use yater::app::App;
-use yater::document::{Block, ChapterRange, Document, ImageBlock, TextBlock, TocNode};
-use yater::runtime::run_terminal_loop;
+use yater::document::{
+    AnnotationRef, Block, ChapterRange, Document, ImageBlock, TextBlock, TocNode,
+};
+use yater::runtime::{
+    run_terminal_event_loop, run_terminal_loop, EventSource, RuntimeError, RuntimeEvent,
+};
 
 #[test]
 fn initial_runtime_frame_shows_the_reading_context() {
@@ -148,6 +152,320 @@ fn navigation_scrolls_past_the_rendered_height_of_an_inline_image() {
         "{snapshot:?}"
     );
     assert!(!snapshot.contains("Heading."));
+}
+
+#[test]
+fn annotation_overlay_keeps_a_top_of_view_sentence_visible() {
+    let mut annotations = HashMap::new();
+    annotations.insert("note-1".to_string(), "Footnote text.".to_string());
+    let mut app = App::new(Document {
+        blocks: vec![
+            Block::Text(TextBlock {
+                text: "Opening [1].".to_string(),
+                chapter_index: 0,
+                annotations: vec![AnnotationRef {
+                    id: "note-1".to_string(),
+                    offset: "Opening ".len(),
+                }],
+            }),
+            text_block("Following paragraph."),
+        ],
+        toc: vec![TocNode {
+            title: "Chapter One".to_string(),
+            target_block_index: 0,
+            children: Vec::new(),
+        }],
+        annotations,
+        chapter_ranges: vec![ChapterRange {
+            start_block: 0,
+            end_block: 1,
+        }],
+    });
+    let backend = TestBackend::new(32, 7);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    run_terminal_loop(
+        &mut terminal,
+        &mut app,
+        [KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE)],
+    )
+    .expect("run terminal");
+
+    assert_eq!(
+        frame_snapshot(terminal.backend().buffer()),
+        concat!(
+            "           Chapter One\n",
+            "┌──────────────────────────────┐\n",
+            "│Footnote text.                │\n",
+            "└──────────────────────────────┘\n",
+            "Opening [1].\n",
+            "Following paragraph.\n",
+            ""
+        )
+    );
+    assert_eq!(reversed_text(terminal.backend().buffer()), "Opening [1].");
+}
+
+#[test]
+fn immersed_annotation_stops_scrolling_at_the_last_full_viewport() {
+    let mut annotations = HashMap::new();
+    annotations.insert(
+        "note-1".to_string(),
+        "Line one\nLine two\nLine three\nLine four\nLine five\nLine six".to_string(),
+    );
+    let mut app = App::new(Document {
+        blocks: vec![Block::Text(TextBlock {
+            text: "Opening [1].".to_string(),
+            chapter_index: 0,
+            annotations: vec![AnnotationRef {
+                id: "note-1".to_string(),
+                offset: "Opening ".len(),
+            }],
+        })],
+        toc: vec![TocNode {
+            title: "Chapter One".to_string(),
+            target_block_index: 0,
+            children: Vec::new(),
+        }],
+        annotations,
+        chapter_ranges: vec![ChapterRange {
+            start_block: 0,
+            end_block: 0,
+        }],
+    });
+    let backend = TestBackend::new(30, 7);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut keys = vec![
+        KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    ];
+    keys.extend(
+        (0..10).map(|_| KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
+    );
+
+    run_terminal_loop(&mut terminal, &mut app, keys).expect("run terminal");
+
+    assert_eq!(
+        frame_snapshot(terminal.backend().buffer()),
+        concat!(
+            "          Chapter One\n",
+            "┌────────────────────────────┐\n",
+            "│Line three                  │\n",
+            "│Line four                   │\n",
+            "│Line five                   │\n",
+            "│Line six                    │\n",
+            "└────────────────────────────┘"
+        )
+    );
+}
+
+#[test]
+fn enter_keeps_a_short_annotation_in_the_compact_overlay() {
+    let mut annotations = HashMap::new();
+    annotations.insert("note-1".to_string(), "Short note.".to_string());
+    let mut app = App::new(Document {
+        blocks: vec![Block::Text(TextBlock {
+            text: "Opening [1].".to_string(),
+            chapter_index: 0,
+            annotations: vec![AnnotationRef {
+                id: "note-1".to_string(),
+                offset: "Opening ".len(),
+            }],
+        })],
+        toc: vec![TocNode {
+            title: "Chapter One".to_string(),
+            target_block_index: 0,
+            children: Vec::new(),
+        }],
+        annotations,
+        chapter_ranges: vec![ChapterRange {
+            start_block: 0,
+            end_block: 0,
+        }],
+    });
+    let backend = TestBackend::new(30, 7);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    run_terminal_loop(
+        &mut terminal,
+        &mut app,
+        [
+            KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        ],
+    )
+    .expect("run terminal");
+
+    let snapshot = frame_snapshot(terminal.backend().buffer());
+    assert!(snapshot.contains("Short note."));
+    assert!(snapshot.contains("Opening [1]."));
+    assert_eq!(snapshot.matches('┌').count(), 1);
+    assert_eq!(snapshot.matches('└').count(), 1);
+}
+
+#[test]
+fn enlarging_the_terminal_clamps_immersed_annotation_scroll() {
+    let mut annotations = HashMap::new();
+    annotations.insert(
+        "note-1".to_string(),
+        "Line one\nLine two\nLine three\nLine four\nLine five\nLine six".to_string(),
+    );
+    let mut app = App::new(Document {
+        blocks: vec![Block::Text(TextBlock {
+            text: "Opening [1].".to_string(),
+            chapter_index: 0,
+            annotations: vec![AnnotationRef {
+                id: "note-1".to_string(),
+                offset: "Opening ".len(),
+            }],
+        })],
+        toc: Vec::new(),
+        annotations,
+        chapter_ranges: vec![ChapterRange {
+            start_block: 0,
+            end_block: 0,
+        }],
+    });
+    let backend = TestBackend::new(30, 5);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut events = VecEventSource {
+        events: vec![
+            key_event(';'),
+            RuntimeEvent::Terminal(Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            ))),
+            key_event('j'),
+            key_event('j'),
+            key_event('j'),
+            key_event('j'),
+            RuntimeEvent::Terminal(Event::Resize(30, 10)),
+        ],
+    };
+
+    let error = run_terminal_event_loop(&mut terminal, &mut app, &mut events)
+        .expect_err("test event source should finish");
+
+    assert_eq!(error.to_string(), "no more events");
+    assert_eq!(app.annotation_scroll(), 0);
+}
+
+#[test]
+fn escape_steps_back_from_immersion_to_the_compact_overlay() {
+    let mut annotations = HashMap::new();
+    annotations.insert(
+        "note-1".to_string(),
+        "Long annotation line one\nLong annotation line two".to_string(),
+    );
+    let mut app = App::new(Document {
+        blocks: vec![Block::Text(TextBlock {
+            text: "Opening [1].".to_string(),
+            chapter_index: 0,
+            annotations: vec![AnnotationRef {
+                id: "note-1".to_string(),
+                offset: "Opening ".len(),
+            }],
+        })],
+        toc: vec![TocNode {
+            title: "Chapter One".to_string(),
+            target_block_index: 0,
+            children: Vec::new(),
+        }],
+        annotations,
+        chapter_ranges: vec![ChapterRange {
+            start_block: 0,
+            end_block: 0,
+        }],
+    });
+    let backend = TestBackend::new(40, 7);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    run_terminal_loop(
+        &mut terminal,
+        &mut app,
+        [
+            KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        ],
+    )
+    .expect("run terminal");
+
+    let frame = frame_snapshot(terminal.backend().buffer());
+    assert!(frame.contains("Long annotation line one"), "{frame}");
+    assert!(frame.contains("Opening [1]."), "{frame}");
+    assert_eq!(frame.matches('┌').count(), 1);
+    assert_eq!(frame.matches('└').count(), 1);
+}
+
+#[test]
+fn semicolon_cycles_multiple_annotations_in_the_runtime_overlay() {
+    let annotations = HashMap::from([
+        ("note-1".to_string(), "First note.".to_string()),
+        ("note-2".to_string(), "Second note.".to_string()),
+    ]);
+    let mut app = App::new(Document {
+        blocks: vec![Block::Text(TextBlock {
+            text: "Opening [1] and [2].".to_string(),
+            chapter_index: 0,
+            annotations: vec![
+                AnnotationRef {
+                    id: "note-1".to_string(),
+                    offset: "Opening ".len(),
+                },
+                AnnotationRef {
+                    id: "note-2".to_string(),
+                    offset: "Opening [1] and ".len(),
+                },
+            ],
+        })],
+        toc: vec![TocNode {
+            title: "Chapter One".to_string(),
+            target_block_index: 0,
+            children: Vec::new(),
+        }],
+        annotations,
+        chapter_ranges: vec![ChapterRange {
+            start_block: 0,
+            end_block: 0,
+        }],
+    });
+    let backend = TestBackend::new(40, 7);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    run_terminal_loop(
+        &mut terminal,
+        &mut app,
+        [
+            KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE),
+        ],
+    )
+    .expect("run terminal");
+
+    let frame = frame_snapshot(terminal.backend().buffer());
+    assert!(frame.contains("[2/2] Second note."), "{frame}");
+    assert!(frame.contains("Opening [1] and [2]."), "{frame}");
+}
+
+struct VecEventSource {
+    events: Vec<RuntimeEvent>,
+}
+
+impl EventSource for VecEventSource {
+    fn next_event(&mut self) -> Result<RuntimeEvent, RuntimeError> {
+        if self.events.is_empty() {
+            return Err(RuntimeError::new("no more events"));
+        }
+        Ok(self.events.remove(0))
+    }
+}
+
+fn key_event(character: char) -> RuntimeEvent {
+    RuntimeEvent::Terminal(Event::Key(KeyEvent::new(
+        KeyCode::Char(character),
+        KeyModifiers::NONE,
+    )))
 }
 
 fn reading_document() -> Document {
