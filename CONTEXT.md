@@ -13,6 +13,8 @@ A footnote or endnote extracted from the EPUB at parse time. Stored as plain tex
 
 Annotation discovery supports EPUB structural semantics (`epub:type="footnote|endnote"`), DPUB-ARIA roles (`doc-footnote`, `doc-endnote`, and entries under `doc-endnotes`), and EPUB2-style reciprocal fragment links where a note marker links to a note block whose leading link returns to the source marker. `doc-backlink` links and reciprocal return markers are excluded from displayed annotation text.
 
+Parsed annotation markers remain in the reading text and are rendered bold and underlined so numeric markers such as `205`, bracketed markers such as `[1]`, superscript digits, and symbol markers are visibly distinguishable from ordinary text. The current sentence's reverse-video highlight composes with the marker style.
+
 ### AnnotationRef
 Metadata attached to a `TextBlock`. Points into the `AnnotationStore` by ID and records the character offset of the anchor within the block's plain text. Enables the renderer to highlight the anchor and look up the annotation text on `;`.
 

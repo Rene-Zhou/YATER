@@ -78,13 +78,18 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
                         );
                     }
 
-                    let sentence = block.text[range.0..range.1].to_string();
                     let style = if highlighted_sentence_offset == Some(range.0) {
                         Style::default().add_modifier(Modifier::REVERSED)
                     } else {
                         Style::default()
                     };
-                    push_text_span_lines(&mut block_lines, sentence, style);
+                    push_sentence_span_lines(
+                        &mut block_lines,
+                        block,
+                        range,
+                        style,
+                        document,
+                    );
                     cursor = range.1;
                 }
 
@@ -110,6 +115,110 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+fn push_sentence_span_lines(
+    lines: &mut Vec<Vec<Span<'static>>>,
+    block: &crate::document::TextBlock,
+    sentence_range: (usize, usize),
+    base_style: Style,
+    document: &crate::document::Document,
+) {
+    let mut cursor = sentence_range.0;
+    let mut annotation_refs = block
+        .annotations
+        .iter()
+        .filter(|annotation_ref| {
+            sentence_range.0 <= annotation_ref.offset
+                && annotation_ref.offset < sentence_range.1
+                && document.annotation_text(&annotation_ref.id).is_some()
+        })
+        .collect::<Vec<_>>();
+    annotation_refs.sort_by_key(|annotation_ref| annotation_ref.offset);
+
+    for annotation_ref in annotation_refs {
+        if annotation_ref.offset < cursor {
+            continue;
+        }
+        if cursor < annotation_ref.offset {
+            push_text_span_lines(
+                lines,
+                block.text[cursor..annotation_ref.offset].to_string(),
+                base_style,
+            );
+        }
+
+        let marker_end =
+            annotation_marker_end(&block.text, annotation_ref.offset, sentence_range.1);
+        push_text_span_lines(
+            lines,
+            block.text[annotation_ref.offset..marker_end].to_string(),
+            base_style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        );
+        cursor = marker_end;
+    }
+
+    if cursor < sentence_range.1 {
+        push_text_span_lines(
+            lines,
+            block.text[cursor..sentence_range.1].to_string(),
+            base_style,
+        );
+    }
+}
+
+fn annotation_marker_end(text: &str, start: usize, limit: usize) -> usize {
+    let marker = &text[start..limit];
+    let mut characters = marker.char_indices();
+    let Some((_, first)) = characters.next() else {
+        return start;
+    };
+
+    if first.is_ascii_digit() {
+        return start
+            + marker
+                .find(|character: char| !character.is_ascii_digit())
+                .unwrap_or(marker.len());
+    }
+
+    if matches!(first, '[' | '(' | '［' | '（') {
+        let closing = match first {
+            '[' => ']',
+            '(' => ')',
+            '［' => '］',
+            '（' => '）',
+            _ => unreachable!(),
+        };
+        if let Some((index, character)) = characters.find(|(_, character)| *character == closing) {
+            return start + index + character.len_utf8();
+        }
+    }
+
+    if is_super_or_subscript_digit(first) {
+        let relative_end = characters
+            .find(|(_, character)| !is_super_or_subscript_digit(*character))
+            .map(|(index, _)| index)
+            .unwrap_or(marker.len());
+        return start + relative_end;
+    }
+
+    start + first.len_utf8()
+}
+
+fn is_super_or_subscript_digit(character: char) -> bool {
+    matches!(
+        character,
+        '⁰' | '¹'
+            | '²'
+            | '³'
+            | '⁴'
+            | '⁵'
+            | '⁶'
+            | '⁷'
+            | '⁸'
+            | '⁹'
+            | '₀'..='₉'
+    )
 }
 
 fn image_content_lines(
@@ -605,6 +714,47 @@ mod tests {
         assert!(rendered.contains("First sentence."));
         assert!(rendered.contains("Second sentence."));
         assert!(rendered.contains("Third sentence."));
+    }
+
+    #[test]
+    fn renders_parsed_annotation_markers_underlined() {
+        let text = "姬赛斯205乌黑油亮，[12]括号，¹⁴上标，*符号。".to_string();
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                annotations: ["205", "[12]", "¹⁴", "*"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, marker)| AnnotationRef {
+                        id: format!("note-{index}"),
+                        offset: text.find(marker).expect("annotation marker"),
+                    })
+                    .collect(),
+                text,
+                chapter_index: 0,
+            })],
+            toc: Vec::new(),
+            annotations: (0..4)
+                .map(|index| (format!("note-{index}"), format!("Note {index}.")))
+                .collect(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(30, 4);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        for marker in ["205", "[12]", "¹⁴", "*"] {
+            assert!(text_has_modifier(
+                terminal.backend().buffer(),
+                marker,
+                Modifier::UNDERLINED,
+            ), "marker {marker:?}");
+        }
+        assert!(text_has_modifier(
+            terminal.backend().buffer(),
+            "205",
+            Modifier::REVERSED,
+        ));
     }
 
     #[test]
@@ -1307,6 +1457,20 @@ mod tests {
                 let row_text = row.iter().map(|cell| cell.symbol()).collect::<String>();
                 row_text.contains(text) && row.iter().any(|cell| cell.modifier.contains(modifier))
             })
+    }
+
+    fn text_has_modifier(
+        buffer: &ratatui::buffer::Buffer,
+        text: &str,
+        modifier: Modifier,
+    ) -> bool {
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.modifier.contains(modifier))
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+            .contains(text)
     }
 
     fn row_index_with_modifier(
