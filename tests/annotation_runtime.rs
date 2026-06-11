@@ -35,7 +35,77 @@ fn epub_annotation_marker_opens_its_note_in_the_runtime_overlay() {
     assert!(frame.contains("Following paragraph."), "{frame}");
 }
 
+#[test]
+fn epub2_backlinked_annotation_opens_without_its_return_marker() {
+    let tempdir = tempdir().expect("temp dir");
+    let epub_path = tempdir.path().join("backlinked.epub");
+    write_backlinked_epub(&epub_path);
+    let document = epub::open(&epub_path).expect("open EPUB2 annotation");
+    let mut app = App::new(document);
+    let backend = TestBackend::new(40, 7);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    run_terminal_loop(
+        &mut terminal,
+        &mut app,
+        [KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE)],
+    )
+    .expect("run terminal");
+
+    let frame = frame_snapshot(terminal.backend().buffer());
+    assert!(frame.contains("Source sentence1."), "{frame}");
+    assert!(frame.contains("Legacy note text."), "{frame}");
+    assert!(!frame.contains("[1]Legacy note text."), "{frame}");
+}
+
 fn write_annotated_epub(path: &Path) {
+    write_epub(
+        path,
+        "3.0",
+        r#"<itemref idref="chapter"/>"#,
+        r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <p>Source sentence <a epub:type="noteref" href="notes.xhtml#note-1">[1]</a>.</p>
+    <p>Following paragraph.</p>
+  </body>
+</html>"#,
+        r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <aside id="note-1" epub:type="footnote"><p>Parsed footnote text.</p></aside>
+  </body>
+</html>"#,
+    );
+}
+
+fn write_backlinked_epub(path: &Path) {
+    write_epub(
+        path,
+        "2.0",
+        r#"<itemref idref="chapter"/><itemref idref="notes"/>"#,
+        r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Source sentence<a id="source-1" href="notes.xhtml#note-1">1</a>.</p>
+  </body>
+</html>"##,
+        r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p class="publisher-note"><a id="note-1" href="chapter.xhtml#source-1">[1]</a>Legacy note text.</p>
+  </body>
+</html>"##,
+    );
+}
+
+fn write_epub(
+    path: &Path,
+    package_version: &str,
+    spine: &str,
+    chapter: &str,
+    notes: &str,
+) {
     let file = File::create(path).expect("create EPUB");
     let mut writer = ZipWriter::new(file);
     let options = SimpleFileOptions::default();
@@ -56,17 +126,19 @@ fn write_annotated_epub(path: &Path) {
         &mut writer,
         options,
         "OEBPS/content.opf",
-        r#"<?xml version="1.0"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+        &format!(
+            r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{package_version}">
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
     <item id="notes" href="notes.xhtml" media-type="application/xhtml+xml"/>
   </manifest>
   <spine>
-    <itemref idref="chapter"/>
+    {spine}
   </spine>
-</package>"#,
+</package>"#
+        ),
     );
     write_zip_file(
         &mut writer,
@@ -85,24 +157,13 @@ fn write_annotated_epub(path: &Path) {
         &mut writer,
         options,
         "OEBPS/chapter.xhtml",
-        r#"<?xml version="1.0"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-  <body>
-    <p>Source sentence <a epub:type="noteref" href="notes.xhtml#note-1">[1]</a>.</p>
-    <p>Following paragraph.</p>
-  </body>
-</html>"#,
+        chapter,
     );
     write_zip_file(
         &mut writer,
         options,
         "OEBPS/notes.xhtml",
-        r#"<?xml version="1.0"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-  <body>
-    <aside id="note-1" epub:type="footnote"><p>Parsed footnote text.</p></aside>
-  </body>
-</html>"#,
+        notes,
     );
 
     writer.finish().expect("finish EPUB");

@@ -35,6 +35,9 @@ pub fn open_with_issue_logger(
     let opf_base = zip_parent(&opf_path);
 
     let package = parse_package(&opf_xml)?;
+    let legacy_annotation_ids =
+        discover_legacy_annotation_ids(&mut archive, &package, &opf_base);
+    let empty_annotation_ids = HashSet::new();
     let mut blocks = Vec::new();
     let mut annotations = AnnotationStore::new();
     let mut chapter_ranges = Vec::new();
@@ -54,6 +57,9 @@ pub fn open_with_issue_logger(
                 chapter_index,
                 &chapter_path,
                 &chapter_base,
+                legacy_annotation_ids
+                    .get(&chapter_path)
+                    .unwrap_or(&empty_annotation_ids),
             ) {
                 Ok(chapter) => chapter,
                 Err(error) => {
@@ -101,7 +107,13 @@ pub fn open_with_issue_logger(
 
         let item_path = join_zip_path(&opf_base, &item.href);
         match read_zip_text(&mut archive, &item_path) {
-            Ok(item_xml) => match parse_xhtml_annotations(&item_xml, &item_path) {
+            Ok(item_xml) => match parse_xhtml_annotations(
+                &item_xml,
+                &item_path,
+                legacy_annotation_ids
+                    .get(&item_path)
+                    .unwrap_or(&empty_annotation_ids),
+            ) {
                 Ok(item_annotations) => annotations.extend(item_annotations),
                 Err(error) => log_issue(&format!("malformed HTML: {item_path}: {error}")),
             },
@@ -310,16 +322,108 @@ fn parse_package(opf_xml: &str) -> Result<Package, EpubError> {
     })
 }
 
+struct LegacyLink {
+    target: String,
+    is_leading_in_block: bool,
+}
+
+fn discover_legacy_annotation_ids(
+    archive: &mut zip::ZipArchive<File>,
+    package: &Package,
+    opf_base: &str,
+) -> HashMap<String, HashSet<String>> {
+    let mut links = HashMap::new();
+
+    for item in package
+        .manifest
+        .values()
+        .filter(|item| item.media_type == "application/xhtml+xml")
+    {
+        let document_path = join_zip_path(opf_base, &item.href);
+        let Ok(xhtml) = read_zip_text(archive, &document_path) else {
+            continue;
+        };
+        let Ok(document) = roxmltree::Document::parse(&xhtml) else {
+            continue;
+        };
+        let document_base = zip_parent(&document_path);
+
+        for anchor in document.descendants().filter(|node| {
+            node.is_element()
+                && node.tag_name().name() == "a"
+                && node.attribute("id").is_some()
+                && node.attribute("href").is_some()
+        }) {
+            let source = annotation_key(
+                &document_path,
+                anchor.attribute("id").expect("filtered anchor id"),
+            );
+            let Some(target) = annotation_key_from_href(
+                anchor.attribute("href").expect("filtered anchor href"),
+                &document_path,
+                &document_base,
+            ) else {
+                continue;
+            };
+            links.insert(
+                source,
+                LegacyLink {
+                    target,
+                    is_leading_in_block: is_leading_link_in_text_block(anchor),
+                },
+            );
+        }
+    }
+
+    let mut annotation_ids_by_path: HashMap<String, HashSet<String>> = HashMap::new();
+    for (source, link) in &links {
+        let Some(backlink) = links.get(&link.target) else {
+            continue;
+        };
+        if backlink.target != *source
+            || !backlink.is_leading_in_block
+            || link.is_leading_in_block
+        {
+            continue;
+        }
+        let Some((document_path, id)) = link.target.rsplit_once('#') else {
+            continue;
+        };
+        annotation_ids_by_path
+            .entry(document_path.to_string())
+            .or_default()
+            .insert(id.to_string());
+    }
+
+    annotation_ids_by_path
+}
+
+fn is_leading_link_in_text_block(anchor: roxmltree::Node<'_, '_>) -> bool {
+    let Some(container) = anchor
+        .ancestors()
+        .skip(1)
+        .find(|node| node.is_element() && is_text_block_element(node.tag_name().name()))
+    else {
+        return false;
+    };
+
+    !container.descendants().take_while(|node| *node != anchor).any(|node| {
+        node.is_text() && node.text().is_some_and(|text| !text.trim().is_empty())
+    })
+}
+
 fn parse_xhtml_chapter(
     xhtml: &str,
     chapter_index: usize,
     chapter_path: &str,
     chapter_base: &str,
+    legacy_annotation_ids: &HashSet<String>,
 ) -> Result<ParsedChapter, EpubError> {
     let document = roxmltree::Document::parse(xhtml)
         .map_err(|error| EpubError(format!("invalid XHTML chapter: {error}")))?;
     let mut blocks = Vec::new();
-    let annotations = annotations_from_document(&document, chapter_path);
+    let annotations =
+        annotations_from_document(&document, chapter_path, legacy_annotation_ids);
     let mut fragment_targets = HashMap::new();
 
     append_chapter_blocks(
@@ -327,6 +431,7 @@ fn parse_xhtml_chapter(
         chapter_index,
         chapter_path,
         chapter_base,
+        legacy_annotation_ids,
         &mut blocks,
         &mut fragment_targets,
     );
@@ -341,25 +446,44 @@ fn parse_xhtml_chapter(
 fn parse_xhtml_annotations(
     xhtml: &str,
     document_path: &str,
+    legacy_annotation_ids: &HashSet<String>,
 ) -> Result<AnnotationStore, EpubError> {
     let document = roxmltree::Document::parse(xhtml)
         .map_err(|error| EpubError(format!("invalid XHTML annotation document: {error}")))?;
 
-    Ok(annotations_from_document(&document, document_path))
+    Ok(annotations_from_document(
+        &document,
+        document_path,
+        legacy_annotation_ids,
+    ))
 }
 
 fn annotations_from_document(
     document: &roxmltree::Document<'_>,
     document_path: &str,
+    legacy_annotation_ids: &HashSet<String>,
 ) -> AnnotationStore {
     let mut annotations = AnnotationStore::new();
 
     for node in document
         .descendants()
-        .filter(|node| node.is_element() && is_annotation_container(*node))
+        .filter(|node| {
+            node.is_element()
+                && is_annotation_container(*node, legacy_annotation_ids)
+        })
     {
-        if let Some(id) = node.attribute("id") {
-            let text = node_text(node);
+        let annotation_id = node.attribute("id").or_else(|| {
+            node.descendants()
+                .filter(|descendant| descendant.is_element())
+                .filter_map(|descendant| descendant.attribute("id"))
+                .find(|id| legacy_annotation_ids.contains(*id))
+        });
+        if let Some(id) = annotation_id {
+            let text = if legacy_annotation_ids.contains(id) {
+                node_text_excluding_id(node, id)
+            } else {
+                node_text(node)
+            };
 
             if !text.is_empty() {
                 annotations.insert(annotation_key(document_path, id), text);
@@ -515,11 +639,14 @@ fn append_chapter_blocks(
     chapter_index: usize,
     chapter_path: &str,
     chapter_base: &str,
+    legacy_annotation_ids: &HashSet<String>,
     blocks: &mut Vec<Block>,
     fragment_targets: &mut HashMap<String, usize>,
 ) {
     for child in node.children().filter(|child| child.is_element()) {
-        if is_annotation_container(child) || has_annotation_ancestor(child) {
+        if is_annotation_container(child, legacy_annotation_ids)
+            || has_annotation_ancestor(child, legacy_annotation_ids)
+        {
             continue;
         }
 
@@ -530,6 +657,7 @@ fn append_chapter_blocks(
                 chapter_index,
                 chapter_path,
                 chapter_base,
+                legacy_annotation_ids,
                 block_offset,
                 fragment_targets,
             ));
@@ -539,6 +667,7 @@ fn append_chapter_blocks(
                 chapter_index,
                 chapter_path,
                 chapter_base,
+                legacy_annotation_ids,
                 blocks,
                 fragment_targets,
             );
@@ -546,26 +675,84 @@ fn append_chapter_blocks(
     }
 }
 
-fn is_annotation_container(node: roxmltree::Node<'_, '_>) -> bool {
-    node.attribute("id").is_some()
+fn is_annotation_container(
+    node: roxmltree::Node<'_, '_>,
+    legacy_annotation_ids: &HashSet<String>,
+) -> bool {
+    let is_annotation_collection = attribute_contains_any_token(
+        node,
+        "role",
+        &["doc-endnotes"],
+    ) || attribute_contains_any_token(
+        node,
+        "type",
+        &["endnotes", "rearnotes"],
+    );
+    let is_semantic_annotation = node.attribute("id").is_some()
         && (matches!(node.tag_name().name(), "aside" | "note")
-            || node.attributes().any(|attribute| {
-                attribute.name() == "type"
-                    && attribute
-                        .value()
-                        .split_whitespace()
-                        .any(|value| matches!(value, "footnote" | "endnote"))
-            }))
+            || attribute_contains_any_token(node, "type", &["footnote", "endnote"])
+            || attribute_contains_any_token(
+                node,
+                "role",
+                &["doc-footnote", "doc-endnote"],
+            ));
+    let is_legacy_annotation = is_text_block_element(node.tag_name().name())
+        && node.descendants().any(|descendant| {
+            descendant.is_element()
+                && descendant
+                    .attribute("id")
+                    .is_some_and(|id| legacy_annotation_ids.contains(id))
+        });
+    let is_endnote_collection_entry = node.attribute("id").is_some()
+        && is_text_block_element(node.tag_name().name())
+        && node.ancestors().skip(1).any(|ancestor| {
+            ancestor.is_element()
+                && (attribute_contains_any_token(ancestor, "role", &["doc-endnotes"])
+                    || attribute_contains_any_token(
+                        ancestor,
+                        "type",
+                        &["endnotes", "rearnotes"],
+                    ))
+        });
+
+    is_annotation_collection
+        || is_semantic_annotation
+        || is_legacy_annotation
+        || is_endnote_collection_entry
 }
 
-fn has_annotation_ancestor(node: roxmltree::Node<'_, '_>) -> bool {
+fn attribute_contains_any_token(
+    node: roxmltree::Node<'_, '_>,
+    attribute_name: &str,
+    expected: &[&str],
+) -> bool {
+    node.attributes().any(|attribute| {
+        attribute.name() == attribute_name
+            && attribute
+                .value()
+                .split_whitespace()
+                .any(|value| expected.contains(&value))
+    })
+}
+
+fn has_annotation_ancestor(
+    node: roxmltree::Node<'_, '_>,
+    legacy_annotation_ids: &HashSet<String>,
+) -> bool {
     node.ancestors()
         .skip(1)
-        .any(|ancestor| ancestor.is_element() && is_annotation_container(ancestor))
+        .any(|ancestor| {
+            ancestor.is_element()
+                && is_annotation_container(ancestor, legacy_annotation_ids)
+        })
 }
 
 fn is_non_visible_element(node: roxmltree::Node<'_, '_>) -> bool {
     matches!(node.tag_name().name(), "script" | "style")
+}
+
+fn is_annotation_backlink(node: roxmltree::Node<'_, '_>) -> bool {
+    attribute_contains_any_token(node, "role", &["doc-backlink"])
 }
 
 fn node_text(node: roxmltree::Node<'_, '_>) -> String {
@@ -579,9 +766,47 @@ fn node_text(node: roxmltree::Node<'_, '_>) -> String {
     normalized_descendant_text(node)
 }
 
+fn node_text_excluding_id(node: roxmltree::Node<'_, '_>, excluded_id: &str) -> String {
+    let mut text = String::new();
+    append_descendant_text_excluding_id(node, excluded_id, &mut text);
+
+    text.lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn append_descendant_text_excluding_id(
+    node: roxmltree::Node<'_, '_>,
+    excluded_id: &str,
+    text: &mut String,
+) {
+    for child in node.children() {
+        if child.is_text() {
+            if let Some(child_text) = child.text() {
+                text.push_str(child_text);
+            }
+        } else if child.is_element() {
+            if is_non_visible_element(child)
+                || is_annotation_backlink(child)
+                || child.attribute("id") == Some(excluded_id)
+            {
+                continue;
+            }
+
+            if child.tag_name().name() == "br" {
+                text.push('\n');
+            } else {
+                append_descendant_text_excluding_id(child, excluded_id, text);
+            }
+        }
+    }
+}
+
 fn append_annotation_text_blocks(node: roxmltree::Node<'_, '_>, blocks: &mut Vec<String>) {
     for child in node.children().filter(|child| child.is_element()) {
-        if is_non_visible_element(child) {
+        if is_non_visible_element(child) || is_annotation_backlink(child) {
             continue;
         }
 
@@ -621,7 +846,7 @@ fn append_descendant_text(node: roxmltree::Node<'_, '_>, text: &mut String) {
                 text.push_str(child_text);
             }
         } else if child.is_element() {
-            if is_non_visible_element(child) {
+            if is_non_visible_element(child) || is_annotation_backlink(child) {
                 continue;
             }
 
@@ -639,6 +864,7 @@ fn blocks_from_xhtml_element(
     chapter_index: usize,
     chapter_path: &str,
     chapter_base: &str,
+    legacy_annotation_ids: &HashSet<String>,
     block_offset: usize,
     fragment_targets: &mut HashMap<String, usize>,
 ) -> Vec<Block> {
@@ -651,6 +877,7 @@ fn blocks_from_xhtml_element(
         chapter_index,
         chapter_path,
         chapter_base,
+        legacy_annotation_ids,
         block_offset,
         &mut blocks,
         &mut text,
@@ -673,6 +900,7 @@ fn append_visible_blocks(
     chapter_index: usize,
     chapter_path: &str,
     chapter_base: &str,
+    legacy_annotation_ids: &HashSet<String>,
     block_offset: usize,
     blocks: &mut Vec<Block>,
     text: &mut String,
@@ -702,6 +930,7 @@ fn append_visible_blocks(
                     chapter_index,
                     chapter_path,
                     chapter_base,
+                    legacy_annotation_ids,
                     child_block_offset,
                     fragment_targets,
                 ));
@@ -743,6 +972,7 @@ fn append_visible_blocks(
                 chapter_index,
                 chapter_path,
                 chapter_base,
+                legacy_annotation_ids,
                 block_offset,
                 blocks,
                 text,
@@ -1284,6 +1514,127 @@ mod tests {
             document.annotation_text(&annotation.id),
             Some("List footnote text.")
         );
+    }
+
+    #[test]
+    fn extracts_dpub_aria_footnotes_and_endnotes() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>
+      Footnote<a id="source-1" href="#note-1" role="doc-noteref">1</a>.
+      Endnote<a href="#note-2" role="doc-noteref">2</a>.
+    </p>
+    <div id="note-1" role="doc-footnote">
+      <a href="#source-1" role="doc-backlink">[1]</a>
+      ARIA footnote text.
+    </div>
+    <li id="note-2" role="doc-endnote">ARIA endnote text.</li>
+  </body>
+</html>"##,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.annotation_text("OEBPS/chapter1.xhtml#note-1"),
+            Some("ARIA footnote text.")
+        );
+        assert_eq!(
+            document.annotation_text("OEBPS/chapter1.xhtml#note-2"),
+            Some("ARIA endnote text.")
+        );
+    }
+
+    #[test]
+    fn extracts_entries_from_dpub_aria_endnotes_collections() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Source<a href="#note-1" role="doc-noteref">1</a>.</p>
+    <section role="doc-endnotes">
+      <h2>Notes</h2>
+      <ol>
+        <li id="note-1">Collection endnote text.</li>
+      </ol>
+    </section>
+  </body>
+</html>"##,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.annotation_text("OEBPS/chapter1.xhtml#note-1"),
+            Some("Collection endnote text.")
+        );
+        assert_eq!(document.blocks.len(), 1);
+    }
+
+    #[test]
+    fn extracts_epub2_notes_linked_back_to_their_source_anchor() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_epub_with_extra_files(
+            &epub_path,
+            &[
+                (
+                    "chapter1",
+                    "chapter1.xhtml",
+                    r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Source sentence<a id="source-1" href="notes.xhtml#note-1">1</a>.</p>
+  </body>
+</html>"##,
+                ),
+                (
+                    "notes",
+                    "notes.xhtml",
+                    r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p class="publisher-note"><a id="note-1" href="chapter1.xhtml#source-1">[1]</a>Legacy note text.</p>
+  </body>
+</html>"##,
+                ),
+            ],
+            &[],
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="chapter1.xhtml">Chapter One</a></li></ol>
+    </nav>
+  </body>
+</html>"#,
+            None,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let block = document.text_block(0).expect("first text block");
+
+        assert_eq!(block.text, "Source sentence1.");
+        assert_eq!(
+            block.annotations,
+            vec![AnnotationRef {
+                id: "OEBPS/notes.xhtml#note-1".to_string(),
+                offset: "Source sentence".len(),
+            }]
+        );
+        assert_eq!(
+            document.annotation_text("OEBPS/notes.xhtml#note-1"),
+            Some("Legacy note text.")
+        );
+        assert_eq!(document.blocks.len(), 1);
     }
 
     #[test]

@@ -11,6 +11,8 @@ A fundamental rendering unit in the document. Two variants: `TextBlock` (a parag
 ### Annotation
 A footnote or endnote extracted from the EPUB at parse time. Stored as plain text in an `AnnotationStore` (HashMap keyed by ID). Referenced from `TextBlock`s via `AnnotationRef`s that record the character offset of the anchor marker within the block's plain text.
 
+Annotation discovery supports EPUB structural semantics (`epub:type="footnote|endnote"`), DPUB-ARIA roles (`doc-footnote`, `doc-endnote`, and entries under `doc-endnotes`), and EPUB2-style reciprocal fragment links where a note marker links to a note block whose leading link returns to the source marker. `doc-backlink` links and reciprocal return markers are excluded from displayed annotation text.
+
 ### AnnotationRef
 Metadata attached to a `TextBlock`. Points into the `AnnotationStore` by ID and records the character offset of the anchor within the block's plain text. Enables the renderer to highlight the anchor and look up the annotation text on `;`.
 
