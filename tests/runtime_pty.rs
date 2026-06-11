@@ -62,6 +62,47 @@ fn binary_renders_and_restores_a_real_pty_without_graphics_queries_when_images_a
     );
 }
 
+#[test]
+fn binary_opens_an_epub_annotation_in_a_real_pty() {
+    let tempdir = tempdir().expect("temp dir");
+    let epub_path = tempdir.path().join("annotated.epub");
+    write_annotated_runtime_epub(&epub_path);
+    let yater = std::env::var("CARGO_BIN_EXE_yater").expect("binary path");
+    let output = Command::new("python3")
+        .args([
+            "tests/support/capture_runtime.py",
+            &yater,
+            epub_path.to_str().expect("UTF-8 fixture path"),
+            "Opening [1].",
+            ";",
+            "PTY footnote text.",
+        ])
+        .output()
+        .expect("capture annotated reader in PTY");
+
+    if output.status.code() == Some(77) {
+        eprintln!(
+            "skipping PTY assertions: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let screen = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "reader failed: {}\nPTY output: {screen:?}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(screen.contains("\u{1b}[?1049h"));
+    assert!(
+        screen.contains("PTY") && screen.contains("footnote") && screen.contains("text."),
+        "{screen:?}"
+    );
+    assert!(screen.contains("\u{1b}[?1049l"));
+    assert!(!screen.contains("terminal error:"), "{screen:?}");
+}
+
 struct AnsiScreen {
     width: usize,
     height: usize,
@@ -264,6 +305,61 @@ fn write_runtime_epub(path: &Path) {
     <p>Final paragraph.</p>
   </body>
 </html>"#,
+    );
+
+    writer.finish().expect("finish EPUB");
+}
+
+fn write_annotated_runtime_epub(path: &Path) {
+    let file = File::create(path).expect("create EPUB");
+    let mut writer = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+
+    write_zip_file(&mut writer, options, "mimetype", "application/epub+zip");
+    write_zip_file(
+        &mut writer,
+        options,
+        "META-INF/container.xml",
+        r#"<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+    );
+    write_zip_file(
+        &mut writer,
+        options,
+        "OEBPS/content.opf",
+        r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="chapter"/></spine>
+</package>"#,
+    );
+    write_zip_file(
+        &mut writer,
+        options,
+        "OEBPS/nav.xhtml",
+        r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body><nav epub:type="toc"><ol><li><a href="chapter.xhtml">Chapter One</a></li></ol></nav></body>
+</html>"#,
+    );
+    write_zip_file(
+        &mut writer,
+        options,
+        "OEBPS/chapter.xhtml",
+        r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <p>Opening <a epub:type="noteref" href="#note-1">[1]</a>.</p>
+    <aside id="note-1" epub:type="footnote"><p>PTY footnote text.</p></aside>
+  </body>
+</html>"##,
     );
 
     writer.finish().expect("finish EPUB");

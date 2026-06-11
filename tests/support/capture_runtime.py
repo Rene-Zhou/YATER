@@ -18,10 +18,15 @@ def tmux(socket: str, *arguments: str, check: bool = True) -> subprocess.Complet
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("usage: capture_runtime.py <yater> <epub>", file=sys.stderr)
+    if len(sys.argv) not in (3, 6):
+        print(
+            "usage: capture_runtime.py <yater> <epub> "
+            "[<first-frame-text> <trigger-key> <expected-text>]",
+            file=sys.stderr,
+        )
         return 2
 
+    interaction = sys.argv[3:] if len(sys.argv) == 6 else None
     socket = f"yater-runtime-{os.getpid()}"
     session = "reader"
     server_started = False
@@ -64,20 +69,40 @@ def main() -> int:
             )
             tmux(socket, "send-keys", "-t", session, command, "Enter")
 
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline:
-                pane = tmux(socket, "capture-pane", "-p", "-t", session).stdout
-                if b"Opening heading." in pane:
-                    break
-                time.sleep(0.05)
-            else:
+            first_frame_text = (
+                interaction[0].encode() if interaction else b"Opening heading."
+            )
+            pane = wait_for_pane_text(socket, session, first_frame_text, 20)
+            if pane is None:
                 print(
-                    f"reader did not render its first frame: {pane!r}",
+                    f"reader did not render its first frame: {first_frame_text!r}",
                     file=sys.stderr,
                 )
                 return 124
 
-            time.sleep(1)
+            if interaction:
+                time.sleep(0.5)
+                tmux(
+                    socket,
+                    "send-keys",
+                    "-t",
+                    session,
+                    "-H",
+                    interaction[1].encode().hex(),
+                )
+                expected_text = interaction[2].encode()
+                pane = wait_for_pane_text(socket, session, expected_text, 5)
+                if pane is None:
+                    pane = tmux(socket, "capture-pane", "-p", "-t", session).stdout
+                    print(
+                        "reader did not render interaction result: "
+                        f"{expected_text!r}; pane={pane!r}",
+                        file=sys.stderr,
+                    )
+                    return 124
+                tmux(socket, "send-keys", "-t", session, "Escape")
+                time.sleep(0.1)
+
             tmux(socket, "send-keys", "-t", session, "-l", "q")
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -95,6 +120,21 @@ def main() -> int:
         finally:
             if server_started:
                 tmux(socket, "kill-server", check=False)
+
+
+def wait_for_pane_text(
+    socket: str,
+    session: str,
+    expected: bytes,
+    timeout: float,
+) -> bytes | None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pane = tmux(socket, "capture-pane", "-p", "-t", session).stdout
+        if expected in pane:
+            return pane
+        time.sleep(0.05)
+    return None
 
 
 if __name__ == "__main__":
