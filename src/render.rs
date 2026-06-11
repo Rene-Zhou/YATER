@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph, Wrap};
 use ratatui_image::{Image as TerminalImage, Resize};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     let area = frame.area();
@@ -493,7 +493,7 @@ fn annotation_layout(app: &App, content: Rect) -> (Rect, Rect) {
         return (content, content);
     }
 
-    let overlay_height = 3.min(content.height);
+    let overlay_height = compact_annotation_height(app, content);
     let sentence_row = current_sentence_screen_row(app, content).unwrap_or(0);
     let visible_sentence_row = sentence_row.saturating_sub(content_scroll_offset(app, content));
     let clearance = overlay_height.saturating_sub(visible_sentence_row);
@@ -515,6 +515,28 @@ fn annotation_layout(app: &App, content: Rect) -> (Rect, Rect) {
     (reading_content, annotation_area)
 }
 
+fn compact_annotation_height(app: &App, content: Rect) -> u16 {
+    let max_height = if content.height <= 3 {
+        content.height
+    } else {
+        content.height.saturating_sub(1).min(8).max(3)
+    };
+    let Some(annotation) = current_annotation(app) else {
+        return 3.min(content.height);
+    };
+    let inner_width = usize::from(content.width.min(50).saturating_sub(2).max(1));
+    let text_height = annotation_text_display_height(&annotation.display_text(), inner_width);
+
+    (text_height as u16).saturating_add(2).max(3).min(max_height)
+}
+
+fn annotation_text_display_height(text: &str, width: usize) -> usize {
+    text.lines()
+        .map(|line| UnicodeWidthStr::width(line).max(1).div_ceil(width.max(1)))
+        .sum::<usize>()
+        .max(1)
+}
+
 fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     let Some(annotation) = current_annotation(app) else {
         return;
@@ -523,10 +545,9 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App
     let annotation_text = annotation.display_text();
     let mut paragraph =
         Paragraph::new(annotation_text).block(WidgetBlock::default().borders(Borders::ALL));
+    paragraph = paragraph.wrap(Wrap { trim: false });
     if is_immersed {
-        paragraph = paragraph
-            .wrap(Wrap { trim: false })
-            .scroll((app.annotation_scroll().min(u16::MAX as usize) as u16, 0));
+        paragraph = paragraph.scroll((app.annotation_scroll().min(u16::MAX as usize) as u16, 0));
     }
 
     frame.render_widget(Clear, area);
@@ -968,6 +989,75 @@ mod tests {
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("┌"));
         assert!(rendered.contains("┘"));
+    }
+
+    #[test]
+    fn compact_annotation_overlay_expands_to_show_multiple_lines() {
+        let mut annotations = HashMap::new();
+        annotations.insert(
+            "note-1".to_string(),
+            "Line one\nLine two\nLine three\nLine four".to_string(),
+        );
+        let document = Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "Text with [1].".to_string(),
+                chapter_index: 0,
+                annotations: vec![AnnotationRef {
+                    id: "note-1".to_string(),
+                    offset: "Text with ".len(),
+                }],
+            })],
+            toc: Vec::new(),
+            annotations,
+            chapter_ranges: Vec::new(),
+        };
+        let mut app = App::new(document);
+        app.apply(Action::OpenAnnotationOverlay);
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("Line one"));
+        assert!(rendered.contains("Line two"));
+        assert!(rendered.contains("Line three"));
+    }
+
+    #[test]
+    fn compact_annotation_overlay_expands_for_wrapped_single_line_note() {
+        let mut annotations = HashMap::new();
+        annotations.insert(
+            "note-1".to_string(),
+            concat!(
+                "first segment stays visible second segment should wrap ",
+                "into the compact overlay third segment should be visible too"
+            )
+            .to_string(),
+        );
+        let document = Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "Text with [1].".to_string(),
+                chapter_index: 0,
+                annotations: vec![AnnotationRef {
+                    id: "note-1".to_string(),
+                    offset: "Text with ".len(),
+                }],
+            })],
+            toc: Vec::new(),
+            annotations,
+            chapter_ranges: Vec::new(),
+        };
+        let mut app = App::new(document);
+        app.apply(Action::OpenAnnotationOverlay);
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rendered = buffer_text(terminal.backend().buffer());
+        assert!(rendered.contains("compact overlay"));
+        assert!(rendered.contains("visible too"));
     }
 
     #[test]

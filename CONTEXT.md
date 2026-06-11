@@ -43,7 +43,7 @@ Save reading position to `$XDG_DATA_HOME/yater/progress.json`. Keyed by file pat
 A `Vec<TocNode>` tree parsed from the EPUB's navigation document. Each `TocNode` has title, target block index, and children. Rendered in a sidebar with indent guides (`│`, `└`, `├`), expand/collapse markers (`▸`/`▾`), and selection highlight. Inspired by neo-tree.nvim's component-composition pattern. `TocState` tracks expanded nodes (HashSet), selected row, and scroll offset.
 
 ### Annotation overlay
-A floating window drawn on top of the content area. Bottom edge aligns with the top of the current highlighted sentence. Bordered `Paragraph` widget via ratatui's `Clear` + draw. Multiple annotations cycle with `;`, counter shown as `[2/3]`. If text overflows, `Enter` enters `AnnotationImmersed` for scroll. Drawn after content to render on top.
+A floating window drawn on top of the content area. Bottom edge aligns with the top of the current highlighted sentence. Bordered `Paragraph` widget via ratatui's `Clear` + draw. The compact overlay wraps text and grows with short-to-medium notes up to a capped height while preserving reading context. Multiple annotations cycle with `;`, counter shown as `[2/3]`. If text still overflows, `Enter` enters `AnnotationImmersed` for scroll. Drawn after content to render on top.
 
 ### CLI
 `yater <file.epub> [--image-mode=sixel|halfblock|off]`. One required positional arg, one optional flag. No subcommands, no config file in v1.
