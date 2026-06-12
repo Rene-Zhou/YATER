@@ -622,8 +622,8 @@ fn append_toc_rows<'a>(
 
 fn focus_highlight_style() -> Style {
     Style::default()
-        .fg(Color::Magenta)
-        .bg(Color::Rgb(36, 24, 44))
+        .fg(Color::Rgb(186, 154, 255))
+        .bg(Color::Rgb(51, 51, 51))
 }
 
 fn annotation_layout(app: &App, content: Rect) -> (Rect, Rect) {
@@ -1019,8 +1019,8 @@ mod tests {
     fn focus_highlight_uses_color_without_bold() {
         let style = focus_highlight_style();
 
-        assert_eq!(style.fg, Some(Color::Magenta));
-        assert_eq!(style.bg, Some(Color::Rgb(36, 24, 44)));
+        assert_eq!(style.fg, Some(Color::Rgb(186, 154, 255)));
+        assert_eq!(style.bg, Some(Color::Rgb(51, 51, 51)));
         assert!(!style.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -1818,7 +1818,7 @@ mod tests {
     }
 
     fn is_highlight_cell(cell: &ratatui::buffer::Cell) -> bool {
-        cell.fg == Color::Magenta && cell.bg == Color::Rgb(36, 24, 44)
+        cell.fg == Color::Rgb(186, 154, 255) && cell.bg == Color::Rgb(51, 51, 51)
     }
 
     fn row_index_containing_text(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<usize> {
