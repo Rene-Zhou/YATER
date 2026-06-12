@@ -61,6 +61,9 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
         .map(|range| range.start_block..=range.end_block)
         .unwrap_or(position.block_index..=position.block_index);
     let mut lines = Vec::new();
+    let (top_padding, bottom_padding) = typewriter_padding(content.height);
+
+    lines.extend((0..top_padding).map(|_| Line::default()));
 
     for block_index in chapter_range {
         match document.blocks.get(block_index) {
@@ -113,6 +116,8 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
     if lines.is_empty() {
         lines.push(Line::default());
     }
+
+    lines.extend((0..bottom_padding).map(|_| Line::default()));
 
     lines
 }
@@ -494,14 +499,36 @@ fn annotation_layout(app: &App, content: Rect) -> (Rect, Rect) {
     }
 
     let overlay_height = compact_annotation_height(app, content);
-    let sentence_row = current_sentence_screen_row(app, content).unwrap_or(0);
-    let visible_sentence_row = sentence_row.saturating_sub(content_scroll_offset(app, content));
-    let clearance = overlay_height.saturating_sub(visible_sentence_row);
-    let reading_content = Rect {
-        y: content.y.saturating_add(clearance),
-        height: content.height.saturating_sub(clearance),
-        ..content
-    };
+    let mut clearance = 0;
+    let mut reading_content;
+    let mut visible_sentence_row;
+
+    loop {
+        reading_content = Rect {
+            y: content.y.saturating_add(clearance),
+            height: content.height.saturating_sub(clearance),
+            ..content
+        };
+        visible_sentence_row = current_sentence_screen_row(app, reading_content)
+            .map(|sentence_row| {
+                sentence_row.saturating_sub(content_scroll_offset(app, reading_content))
+            })
+            .unwrap_or(0);
+        let sentence_row_from_content_top = clearance.saturating_add(visible_sentence_row);
+        let required_clearance = overlay_height.saturating_sub(sentence_row_from_content_top);
+        if required_clearance == 0 || clearance >= content.height {
+            break;
+        }
+
+        let next_clearance = clearance
+            .saturating_add(required_clearance)
+            .min(content.height);
+        if next_clearance == clearance {
+            break;
+        }
+        clearance = next_clearance;
+    }
+
     let annotation_area = Rect {
         x: content.x,
         y: reading_content
@@ -579,8 +606,11 @@ fn current_sentence_screen_row(app: &App, content: Rect) -> Option<u16> {
         })
         .fold(0u16, u16::saturating_add);
 
+    let (top_padding, _) = typewriter_padding(content.height);
     Some(
-        preceding_rows.saturating_add(wrapped_row_for_prefix(prefix, content.width)),
+        top_padding
+            .saturating_add(preceding_rows)
+            .saturating_add(wrapped_row_for_prefix(prefix, content.width)),
     )
 }
 
@@ -589,7 +619,46 @@ fn content_scroll_offset(app: &App, content: Rect) -> u16 {
         return 0;
     };
 
-    sentence_row.saturating_sub(content.height.saturating_sub(1))
+    let center_row = typewriter_center_row(content.height);
+    let desired_scroll = sentence_row.saturating_sub(center_row);
+    let max_scroll = content_screen_rows(app, content).saturating_sub(content.height);
+
+    desired_scroll.min(max_scroll)
+}
+
+fn content_screen_rows(app: &App, content: Rect) -> u16 {
+    let document = app.document();
+    let position = app.position();
+    let chapter_range = document
+        .chapter_range_for_block(position.block_index)
+        .map(|range| range.start_block..=range.end_block)
+        .unwrap_or(position.block_index..=position.block_index);
+    let (top_padding, bottom_padding) = typewriter_padding(content.height);
+    let rows = chapter_range
+        .filter_map(|block_index| document.blocks.get(block_index))
+        .map(|block| match block {
+            Block::Text(block) => text_block_screen_rows(&block.text, content.width),
+            Block::Image(image) => {
+                image_content_lines(image, app.image_mode(), content).len() as u16
+            }
+        })
+        .fold(0u16, u16::saturating_add)
+        .max(1);
+
+    top_padding
+        .saturating_add(rows)
+        .saturating_add(bottom_padding)
+}
+
+fn typewriter_center_row(height: u16) -> u16 {
+    height / 2
+}
+
+fn typewriter_padding(height: u16) -> (u16, u16) {
+    let top = typewriter_center_row(height);
+    let bottom = height.saturating_sub(top.saturating_add(1));
+
+    (top, bottom)
 }
 
 fn wrapped_row_for_prefix(prefix: &str, width: u16) -> u16 {
@@ -809,6 +878,37 @@ mod tests {
             Modifier::REVERSED,
         ));
         assert!(!buffer_text(terminal.backend().buffer()).contains("One."));
+    }
+
+    #[test]
+    fn keeps_highlighted_sentence_on_typewriter_center_row() {
+        let prefix = "One.\nTwo.\nThree.\n";
+        let document = Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: format!("{prefix}Four.\nFive.\nSix."),
+                chapter_index: 0,
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::with_position(
+            document,
+            ReadingPosition {
+                block_index: 0,
+                sentence_offset: prefix.len() - 1,
+            },
+        );
+        let backend = TestBackend::new(30, 7);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert_eq!(
+            row_index_with_modifier(terminal.backend().buffer(), Modifier::REVERSED),
+            Some(4)
+        );
     }
 
     #[test]

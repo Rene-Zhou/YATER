@@ -30,12 +30,12 @@ fn initial_runtime_frame_shows_the_reading_context() {
         frame_snapshot(terminal.backend().buffer()),
         concat!(
             "           Chapter One\n",
+            "\n",
+            "\n",
+            "\n",
             "Heading.\n",
             "First paragraph. Second\n",
-            "sentence.\n",
-            "Final paragraph.\n",
-            "\n",
-            ""
+            "sentence."
         )
     );
     assert_eq!(reversed_text(terminal.backend().buffer()), "Heading.");
@@ -62,9 +62,9 @@ fn paragraph_navigation_scrolls_the_runtime_frame_with_context() {
         frame_snapshot(terminal.backend().buffer()),
         concat!(
             "           Section One\n",
-            "First paragraph. Second\n",
             "sentence.\n",
-            "Final paragraph."
+            "Final paragraph.\n",
+            ""
         )
     );
     assert_eq!(

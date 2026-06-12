@@ -39,6 +39,9 @@ Auto-detect terminal graphics capability via `ratatui-image`'s `Picker` at start
 ### Progress persistence
 Save reading position to `$XDG_DATA_HOME/yater/progress.json`. Keyed by file path. Stores block index, sentence offset, and timestamp. Auto-save on navigation (debounced). Restore on open if progress exists for the given EPUB.
 
+### Reader viewport
+Text reading uses a typewriter-style viewport: the highlighted sentence line is kept on the vertical center row of the content area. The renderer adds virtual top/bottom padding so the first and last text lines can also be centered instead of being clamped to the screen edges.
+
 ### TOC
 A `Vec<TocNode>` tree parsed from the EPUB's navigation document. Each `TocNode` has title, target block index, and children. Rendered in a sidebar with indent guides (`│`, `└`, `├`), expand/collapse markers (`▸`/`▾`), and selection highlight. Inspired by neo-tree.nvim's component-composition pattern. `TocState` tracks expanded nodes (HashSet), selected row, and scroll offset.
 

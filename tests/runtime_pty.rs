@@ -43,13 +43,12 @@ fn binary_renders_and_restores_a_real_pty_without_graphics_queries_when_images_a
         AnsiScreen::capture(&output.stdout, 40, 8).snapshot(),
         concat!(
             "               Chapter One\n",
+            "\n",
+            "\n",
+            "\n",
             "Opening heading.\n",
             "First paragraph.\n",
-            "Final paragraph.\n",
-            "\n",
-            "\n",
-            "\n",
-            ""
+            "Final paragraph.\n"
         )
     );
     assert!(screen.contains("\u{1b}[?1049l"), "did not leave alternate screen");
