@@ -42,14 +42,14 @@ fn binary_renders_and_restores_a_real_pty_without_graphics_queries_when_images_a
     assert_eq!(
         AnsiScreen::capture(&output.stdout, 40, 8).snapshot(),
         concat!(
-            "YATER | Chapter One\n",
+            "  YATER | Chapter One\n",
             "\n",
             "\n",
             "\n",
             "Opening heading.\n",
             "First  paragraph.\n",
             "Final  paragraph.\n",
-            "READ j/k | ; | Tab | q"
+            "  READ j/k | ; | Tab | q"
         )
     );
     assert!(screen.contains("\u{1b}[?1049l"), "did not leave alternate screen");

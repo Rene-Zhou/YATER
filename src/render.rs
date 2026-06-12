@@ -30,8 +30,8 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     let shell = WidgetBlock::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(Line::from(title).centered())
-        .title_bottom(footer.centered());
+        .title(Line::from(title).left_aligned())
+        .title_bottom(footer.left_aligned());
     let content = shell.inner(area);
 
     frame.render_widget(shell, area);
@@ -61,18 +61,22 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
 }
 
 fn frame_title(chapter_title: &str, width: u16) -> Vec<Span<'static>> {
-    let available_width = usize::from(width.saturating_sub(4));
+    let available_width = usize::from(width.saturating_sub(6));
     if available_width <= 7 {
-        return vec![Span::styled(
-            "YATER",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )];
+        return vec![
+            Span::raw("  "),
+            Span::styled(
+                "YATER",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
     }
 
     let chapter_width = available_width.saturating_sub("YATER | ".len());
     vec![
+        Span::raw("  "),
         Span::styled(
             "YATER",
             Style::default()
@@ -116,7 +120,7 @@ fn shortcut_footer(focus: Focus, width: u16) -> Line<'static> {
 }
 
 fn shortcut_line(text: &str) -> Line<'static> {
-    let mut spans = Vec::new();
+    let mut spans = vec![Span::raw("  ")];
     for (index, part) in text.split(' ').enumerate() {
         if index > 0 {
             spans.push(Span::raw(" "));
@@ -205,7 +209,7 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
                     }
 
                     let style = if highlighted_sentence_offset == Some(range.0) {
-                        Style::default().add_modifier(Modifier::REVERSED)
+                        focus_highlight_style()
                     } else {
                         Style::default()
                     };
@@ -585,7 +589,7 @@ fn append_toc_rows<'a>(
     };
     let mut row = Line::from(format!("{prefix}{branch}{marker}{}", node.title));
     if rows.len() == app.selected_toc_row() {
-        row = row.style(Style::default().add_modifier(Modifier::REVERSED));
+        row = row.style(focus_highlight_style());
     }
     rows.push(row);
 
@@ -614,6 +618,13 @@ fn append_toc_rows<'a>(
             rows,
         );
     }
+}
+
+fn focus_highlight_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(238, 232, 213))
+        .bg(Color::Rgb(38, 43, 51))
+        .add_modifier(Modifier::BOLD)
 }
 
 fn annotation_layout(app: &App, content: Rect) -> (Rect, Rect) {
@@ -968,8 +979,9 @@ mod tests {
         assert!(text_has_modifier(
             terminal.backend().buffer(),
             "205",
-            Modifier::REVERSED,
+            Modifier::UNDERLINED,
         ));
+        assert!(text_has_highlight(terminal.backend().buffer(), "205"));
     }
 
     #[test]
@@ -997,10 +1009,9 @@ mod tests {
 
         terminal.draw(|frame| draw(frame, &app)).expect("draw");
 
-        assert!(row_with_text_has_modifier(
+        assert!(row_with_text_has_highlight(
             terminal.backend().buffer(),
             "Seven.",
-            Modifier::REVERSED,
         ));
         assert!(!buffer_text(terminal.backend().buffer()).contains("One."));
     }
@@ -1031,7 +1042,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &app)).expect("draw");
 
         assert_eq!(
-            row_index_with_modifier(terminal.backend().buffer(), Modifier::REVERSED),
+            row_index_with_highlight(terminal.backend().buffer()),
             Some(3)
         );
     }
@@ -1109,10 +1120,9 @@ mod tests {
 
         terminal.draw(|frame| draw(frame, &app)).expect("draw");
 
-        assert!(row_with_text_has_modifier(
+        assert!(row_with_text_has_highlight(
             terminal.backend().buffer(),
             "Section One",
-            Modifier::REVERSED,
         ));
     }
 
@@ -1130,10 +1140,9 @@ mod tests {
 
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("Section Six"));
-        assert!(row_with_text_has_modifier(
+        assert!(row_with_text_has_highlight(
             terminal.backend().buffer(),
             "Section Six",
-            Modifier::REVERSED,
         ));
     }
 
@@ -1322,8 +1331,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &app)).expect("draw");
 
         let buffer = terminal.backend().buffer();
-        let highlighted_row = row_index_with_modifier(buffer, Modifier::REVERSED)
-            .expect("highlighted sentence row");
+        let highlighted_row = row_index_with_highlight(buffer).expect("highlighted sentence row");
         let overlay_bottom_row = row_index_containing_text(buffer, "└")
             .expect("overlay bottom border row");
 
@@ -1760,17 +1768,13 @@ mod tests {
             .collect::<Vec<_>>()
     }
 
-    fn row_with_text_has_modifier(
-        buffer: &ratatui::buffer::Buffer,
-        text: &str,
-        modifier: Modifier,
-    ) -> bool {
+    fn row_with_text_has_highlight(buffer: &ratatui::buffer::Buffer, text: &str) -> bool {
         buffer
             .content()
             .chunks(buffer.area.width as usize)
             .any(|row| {
                 let row_text = row.iter().map(|cell| cell.symbol()).collect::<String>();
-                row_text.contains(text) && row.iter().any(|cell| cell.modifier.contains(modifier))
+                row_text.contains(text) && row.iter().any(is_highlight_cell)
             })
     }
 
@@ -1788,14 +1792,25 @@ mod tests {
             .contains(text)
     }
 
-    fn row_index_with_modifier(
-        buffer: &ratatui::buffer::Buffer,
-        modifier: Modifier,
-    ) -> Option<usize> {
+    fn text_has_highlight(buffer: &ratatui::buffer::Buffer, text: &str) -> bool {
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| is_highlight_cell(cell))
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+            .contains(text)
+    }
+
+    fn row_index_with_highlight(buffer: &ratatui::buffer::Buffer) -> Option<usize> {
         buffer
             .content()
             .chunks(buffer.area.width as usize)
-            .position(|row| row.iter().any(|cell| cell.modifier.contains(modifier)))
+            .position(|row| row.iter().any(is_highlight_cell))
+    }
+
+    fn is_highlight_cell(cell: &ratatui::buffer::Cell) -> bool {
+        cell.bg == Color::Rgb(38, 43, 51)
     }
 
     fn row_index_containing_text(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<usize> {

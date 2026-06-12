@@ -3,7 +3,7 @@ use std::io::Cursor;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
-use ratatui::style::Modifier;
+use ratatui::style::Color;
 use ratatui::Terminal;
 use yater::app::App;
 use yater::document::{
@@ -29,16 +29,16 @@ fn initial_runtime_frame_shows_the_reading_context() {
     assert_eq!(
         frame_snapshot(terminal.backend().buffer()),
         concat!(
-            "┌─────YATER | Chapter One──────┐\n",
+            "┌  YATER | Chapter One─────────┐\n",
             "│                              │\n",
             "│                              │\n",
             "│Heading.                      │\n",
             "│First paragraph. Second       │\n",
             "│sentence.                     │\n",
-            "└────READ j/k | ; | Tab | q────┘"
+            "└  READ j/k | ; | Tab | q──────┘"
         )
     );
-    assert_eq!(reversed_text(terminal.backend().buffer()), "Heading.");
+    assert_eq!(highlighted_text(terminal.backend().buffer()), "Heading.");
 }
 
 #[test]
@@ -61,14 +61,14 @@ fn paragraph_navigation_scrolls_the_runtime_frame_with_context() {
     assert_eq!(
         frame_snapshot(terminal.backend().buffer()),
         concat!(
-            "┌─────YATER | Section One──────┐\n",
+            "┌  YATER | Section One─────────┐\n",
             "│sentence.                     │\n",
             "│Final paragraph.              │\n",
-            "└────READ j/k | ; | Tab | q────┘"
+            "└  READ j/k | ; | Tab | q──────┘"
         )
     );
     assert_eq!(
-        reversed_text(terminal.backend().buffer()),
+        highlighted_text(terminal.backend().buffer()),
         "Final paragraph."
     );
 }
@@ -101,7 +101,7 @@ fn toc_key_opens_a_tree_sidebar_in_the_runtime_frame() {
     );
     assert!(frame_snapshot(terminal.backend().buffer()).contains("TOC j/k | Enter"));
     assert_eq!(
-        reversed_text(terminal.backend().buffer()),
+        highlighted_text(terminal.backend().buffer()),
         "▾ Chapter One"
     );
 }
@@ -147,7 +147,7 @@ fn navigation_scrolls_past_the_rendered_height_of_an_inline_image() {
 
     let snapshot = frame_snapshot(terminal.backend().buffer());
     assert_eq!(
-        reversed_text(terminal.backend().buffer()),
+        highlighted_text(terminal.backend().buffer()),
         "After image.",
         "{snapshot:?}"
     );
@@ -194,16 +194,16 @@ fn annotation_overlay_keeps_a_top_of_view_sentence_visible() {
     assert_eq!(
         frame_snapshot(terminal.backend().buffer()),
         concat!(
-            "┌─────YATER | Chapter One──────┐\n",
+            "┌  YATER | Chapter One─────────┐\n",
             "│┌────────────────────────────┐│\n",
             "││Footnote text.              ││\n",
             "│└────────────────────────────┘│\n",
             "│Opening [1].                  │\n",
             "│Following paragraph.          │\n",
-            "└─────NOTE ; | Enter | Esc─────┘"
+            "└  NOTE ; | Enter | Esc────────┘"
         )
     );
-    assert_eq!(reversed_text(terminal.backend().buffer()), "Opening [1].");
+    assert_eq!(highlighted_text(terminal.backend().buffer()), "Opening [1].");
 }
 
 #[test]
@@ -248,13 +248,13 @@ fn immersed_annotation_stops_scrolling_at_the_last_full_viewport() {
     assert_eq!(
         frame_snapshot(terminal.backend().buffer()),
         concat!(
-            "┌────YATER | Chapter One─────┐\n",
+            "┌  YATER | Chapter One───────┐\n",
             "│Line three                  │\n",
             "│Line four                   │\n",
             "│Line five                   │\n",
             "│Line six                    │\n",
             "│                            │\n",
-            "└───────NOTE j/k | Esc───────┘"
+            "└  NOTE j/k | Esc────────────┘"
         )
     );
 }
@@ -517,11 +517,11 @@ fn frame_snapshot(buffer: &ratatui::buffer::Buffer) -> String {
         .join("\n")
 }
 
-fn reversed_text(buffer: &ratatui::buffer::Buffer) -> String {
+fn highlighted_text(buffer: &ratatui::buffer::Buffer) -> String {
     buffer
         .content()
         .iter()
-        .filter(|cell| cell.modifier.contains(Modifier::REVERSED))
+        .filter(|cell| cell.bg == Color::Rgb(38, 43, 51))
         .map(|cell| cell.symbol())
         .collect()
 }
