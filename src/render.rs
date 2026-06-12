@@ -622,9 +622,8 @@ fn append_toc_rows<'a>(
 
 fn focus_highlight_style() -> Style {
     Style::default()
-        .fg(Color::Rgb(238, 232, 213))
-        .bg(Color::Rgb(38, 43, 51))
-        .add_modifier(Modifier::BOLD)
+        .fg(Color::Rgb(134, 201, 250))
+        .bg(Color::Rgb(16, 42, 48))
 }
 
 fn annotation_layout(app: &App, content: Rect) -> (Rect, Rect) {
@@ -890,7 +889,7 @@ mod tests {
     };
     use crate::input::Action;
 
-    use super::{draw, wrapped_row_for_prefix};
+    use super::{draw, focus_highlight_style, wrapped_row_for_prefix};
 
     #[test]
     fn renders_top_bar_and_current_sentence() {
@@ -1014,6 +1013,15 @@ mod tests {
             "Seven.",
         ));
         assert!(!buffer_text(terminal.backend().buffer()).contains("One."));
+    }
+
+    #[test]
+    fn focus_highlight_uses_color_without_bold() {
+        let style = focus_highlight_style();
+
+        assert_eq!(style.fg, Some(Color::Rgb(134, 201, 250)));
+        assert_eq!(style.bg, Some(Color::Rgb(16, 42, 48)));
+        assert!(!style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -1810,7 +1818,7 @@ mod tests {
     }
 
     fn is_highlight_cell(cell: &ratatui::buffer::Cell) -> bool {
-        cell.bg == Color::Rgb(38, 43, 51)
+        cell.fg == Color::Rgb(134, 201, 250) && cell.bg == Color::Rgb(16, 42, 48)
     }
 
     fn row_index_containing_text(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<usize> {

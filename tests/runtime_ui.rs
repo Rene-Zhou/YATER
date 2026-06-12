@@ -521,7 +521,9 @@ fn highlighted_text(buffer: &ratatui::buffer::Buffer) -> String {
     buffer
         .content()
         .iter()
-        .filter(|cell| cell.bg == Color::Rgb(38, 43, 51))
+        .filter(|cell| {
+            cell.fg == Color::Rgb(134, 201, 250) && cell.bg == Color::Rgb(16, 42, 48)
+        })
         .map(|cell| cell.symbol())
         .collect()
 }
