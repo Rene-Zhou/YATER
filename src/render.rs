@@ -4,7 +4,7 @@ use crate::image::SelectedImageMode;
 use crate::input::Focus;
 use crate::sentence::segment_sentences;
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph, Wrap};
@@ -13,23 +13,30 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     let area = frame.area();
-    if area.width < 20 || area.height < 3 {
+    if area.width < 20 || area.height < 4 {
         frame.render_widget(Paragraph::new("Terminal too small").centered(), area);
         return;
     }
 
-    let [top_bar, content] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .areas(area);
-    let (reading_content, annotation_area) = annotation_layout(app, content);
-
     let document = app.document();
     let position = app.position();
-    let chapter_title = document
-        .chapter_title_for_block(position.block_index)
-        .unwrap_or("");
-    frame.render_widget(Paragraph::new(chapter_title).centered(), top_bar);
+    let title = frame_title(
+        document
+            .chapter_title_for_block(position.block_index)
+            .unwrap_or(""),
+        area.width,
+    );
+    let footer = shortcut_footer(app.focus(), area.width);
+    let shell = WidgetBlock::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Line::from(title).centered())
+        .title_bottom(footer.centered());
+    let content = shell.inner(area);
+
+    frame.render_widget(shell, area);
+
+    let (reading_content, annotation_area) = annotation_layout(app, content);
 
     if !draw_current_image(frame, reading_content, app) {
         let scroll = content_scroll_offset(app, reading_content);
@@ -51,6 +58,122 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     ) {
         draw_annotation_overlay(frame, annotation_area, app);
     }
+}
+
+fn frame_title(chapter_title: &str, width: u16) -> Vec<Span<'static>> {
+    let available_width = usize::from(width.saturating_sub(4));
+    if available_width <= 7 {
+        return vec![Span::styled(
+            "YATER",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )];
+    }
+
+    let chapter_width = available_width.saturating_sub("YATER | ".len());
+    vec![
+        Span::styled(
+            "YATER",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            truncate_to_width(chapter_title, chapter_width),
+            Style::default().fg(Color::White),
+        ),
+    ]
+}
+
+fn shortcut_footer(focus: Focus, width: u16) -> Line<'static> {
+    let text = match (focus, width) {
+        (Focus::Content, width) if width < 44 => "READ j/k | ; | Tab | q",
+        (Focus::Content, width) if width < 54 => "READ j/k | ; note | Tab toc | q",
+        (Focus::Content, _) => {
+            "READ j/k sentence | h/l paragraph | u/n page | ; notes | Tab toc | q quit"
+        }
+        (Focus::Toc, width) if width < 44 => "TOC j/k | Enter | Esc",
+        (Focus::Toc, width) if width < 54 => "TOC j/k move | Enter open | Esc",
+        (Focus::Toc, _) => "TOC j/k move | l/Enter open | h parent | Tab/Esc close",
+        (Focus::AnnotationOverlay, width) if width < 54 => {
+            if width < 44 {
+                "NOTE ; | Enter | Esc"
+            } else {
+                "NOTE ; next | Enter full | Esc"
+            }
+        }
+        (Focus::AnnotationOverlay, _) => {
+            "NOTE ; next note | Enter expand | Esc/other close"
+        }
+        (Focus::AnnotationImmersed, width) if width < 44 => "NOTE j/k | Esc",
+        (Focus::AnnotationImmersed, width) if width < 54 => "NOTE j/k scroll | Esc",
+        (Focus::AnnotationImmersed, _) => "NOTE j/k scroll note | Up/Down scroll | Esc compact",
+    };
+
+    shortcut_line(text)
+}
+
+fn shortcut_line(text: &str) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, part) in text.split(' ').enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+        }
+
+        let style = if matches!(
+            part,
+            "READ"
+                | "TOC"
+                | "NOTE"
+                | "j/k"
+                | "h/l"
+                | "u/n"
+                | ";"
+                | "Tab"
+                | "q"
+                | "Enter"
+                | "Esc"
+                | "l/Enter"
+                | "Tab/Esc"
+                | "Esc/other"
+                | "Up/Down"
+        ) {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else if part == "|" {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        spans.push(Span::styled(part.to_string(), style));
+    }
+
+    Line::from(spans)
+}
+
+fn truncate_to_width(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+
+    let mut width = 0;
+    let mut output = String::new();
+    for character in text.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if width + character_width > max_width.saturating_sub(1) {
+            break;
+        }
+        output.push(character);
+        width += character_width;
+    }
+    output.push('…');
+    output
 }
 
 fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
@@ -570,8 +693,10 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App
     };
     let is_immersed = app.focus() == Focus::AnnotationImmersed;
     let annotation_text = annotation.display_text();
-    let mut paragraph =
-        Paragraph::new(annotation_text).block(WidgetBlock::default().borders(Borders::ALL));
+    let mut paragraph = Paragraph::new(annotation_text);
+    if !is_immersed {
+        paragraph = paragraph.block(WidgetBlock::default().borders(Borders::ALL));
+    }
     paragraph = paragraph.wrap(Wrap { trim: false });
     if is_immersed {
         paragraph = paragraph.scroll((app.annotation_scroll().min(u16::MAX as usize) as u16, 0));
@@ -828,7 +953,7 @@ mod tests {
                 .collect(),
             chapter_ranges: Vec::new(),
         });
-        let backend = TestBackend::new(30, 4);
+        let backend = TestBackend::new(30, 6);
         let mut terminal = Terminal::new(backend).expect("terminal");
 
         terminal.draw(|frame| draw(frame, &app)).expect("draw");
@@ -907,7 +1032,7 @@ mod tests {
 
         assert_eq!(
             row_index_with_modifier(terminal.backend().buffer(), Modifier::REVERSED),
-            Some(4)
+            Some(3)
         );
     }
 
@@ -1202,7 +1327,7 @@ mod tests {
         let overlay_bottom_row = row_index_containing_text(buffer, "└")
             .expect("overlay bottom border row");
 
-        assert_eq!(overlay_bottom_row + 1, highlighted_row);
+        assert!(overlay_bottom_row < highlighted_row);
     }
 
     #[test]

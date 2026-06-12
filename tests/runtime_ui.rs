@@ -29,13 +29,13 @@ fn initial_runtime_frame_shows_the_reading_context() {
     assert_eq!(
         frame_snapshot(terminal.backend().buffer()),
         concat!(
-            "           Chapter One\n",
-            "\n",
-            "\n",
-            "\n",
-            "Heading.\n",
-            "First paragraph. Second\n",
-            "sentence."
+            "┌─────YATER | Chapter One──────┐\n",
+            "│                              │\n",
+            "│                              │\n",
+            "│Heading.                      │\n",
+            "│First paragraph. Second       │\n",
+            "│sentence.                     │\n",
+            "└────READ j/k | ; | Tab | q────┘"
         )
     );
     assert_eq!(reversed_text(terminal.backend().buffer()), "Heading.");
@@ -61,10 +61,10 @@ fn paragraph_navigation_scrolls_the_runtime_frame_with_context() {
     assert_eq!(
         frame_snapshot(terminal.backend().buffer()),
         concat!(
-            "           Section One\n",
-            "sentence.\n",
-            "Final paragraph.\n",
-            ""
+            "┌─────YATER | Section One──────┐\n",
+            "│sentence.                     │\n",
+            "│Final paragraph.              │\n",
+            "└────READ j/k | ; | Tab | q────┘"
         )
     );
     assert_eq!(
@@ -90,16 +90,16 @@ fn toc_key_opens_a_tree_sidebar_in_the_runtime_frame() {
     .expect("run terminal");
 
     assert_eq!(
-        region_snapshot(terminal.backend().buffer(), 0, 1, 20, 6),
+        region_snapshot(terminal.backend().buffer(), 1, 1, 20, 5),
         concat!(
             "▾ Chapter One\n",
             "└ Section One\n",
             "\n",
             "\n",
-            "\n",
             ""
         )
     );
+    assert!(frame_snapshot(terminal.backend().buffer()).contains("TOC j/k | Enter"));
     assert_eq!(
         reversed_text(terminal.backend().buffer()),
         "▾ Chapter One"
@@ -194,13 +194,13 @@ fn annotation_overlay_keeps_a_top_of_view_sentence_visible() {
     assert_eq!(
         frame_snapshot(terminal.backend().buffer()),
         concat!(
-            "           Chapter One\n",
-            "┌──────────────────────────────┐\n",
-            "│Footnote text.                │\n",
-            "└──────────────────────────────┘\n",
-            "Opening [1].\n",
-            "Following paragraph.\n",
-            ""
+            "┌─────YATER | Chapter One──────┐\n",
+            "│┌────────────────────────────┐│\n",
+            "││Footnote text.              ││\n",
+            "│└────────────────────────────┘│\n",
+            "│Opening [1].                  │\n",
+            "│Following paragraph.          │\n",
+            "└─────NOTE ; | Enter | Esc─────┘"
         )
     );
     assert_eq!(reversed_text(terminal.backend().buffer()), "Opening [1].");
@@ -248,13 +248,13 @@ fn immersed_annotation_stops_scrolling_at_the_last_full_viewport() {
     assert_eq!(
         frame_snapshot(terminal.backend().buffer()),
         concat!(
-            "          Chapter One\n",
-            "┌────────────────────────────┐\n",
+            "┌────YATER | Chapter One─────┐\n",
             "│Line three                  │\n",
             "│Line four                   │\n",
             "│Line five                   │\n",
             "│Line six                    │\n",
-            "└────────────────────────────┘"
+            "│                            │\n",
+            "└───────NOTE j/k | Esc───────┘"
         )
     );
 }
@@ -299,8 +299,9 @@ fn enter_keeps_a_short_annotation_in_the_compact_overlay() {
     let snapshot = frame_snapshot(terminal.backend().buffer());
     assert!(snapshot.contains("Short note."));
     assert!(snapshot.contains("Opening [1]."));
-    assert_eq!(snapshot.matches('┌').count(), 1);
-    assert_eq!(snapshot.matches('└').count(), 1);
+    assert_eq!(snapshot.matches('┌').count(), 2);
+    assert_eq!(snapshot.matches('└').count(), 2);
+    assert!(snapshot.contains("NOTE ; | Enter | Esc"));
 }
 
 #[test]
@@ -394,8 +395,9 @@ fn escape_steps_back_from_immersion_to_the_compact_overlay() {
     let frame = frame_snapshot(terminal.backend().buffer());
     assert!(frame.contains("Long annotation line one"), "{frame}");
     assert!(frame.contains("Opening [1]."), "{frame}");
-    assert_eq!(frame.matches('┌').count(), 1);
-    assert_eq!(frame.matches('└').count(), 1);
+    assert_eq!(frame.matches('┌').count(), 2);
+    assert_eq!(frame.matches('└').count(), 2);
+    assert!(frame.contains("NOTE ; | Enter | Esc"));
 }
 
 #[test]

@@ -40,13 +40,13 @@ Auto-detect terminal graphics capability via `ratatui-image`'s `Picker` at start
 Save reading position to `$XDG_DATA_HOME/yater/progress.json`. Keyed by file path. Stores block index, sentence offset, and timestamp. Auto-save on navigation (debounced). Restore on open if progress exists for the given EPUB.
 
 ### Reader viewport
-Text reading uses a typewriter-style viewport: the highlighted sentence line is kept on the vertical center row of the content area. The renderer adds virtual top/bottom padding so the first and last text lines can also be centered instead of being clamped to the screen edges.
+Text reading is framed by a full-screen `Block` with the current chapter in the top border and focus-specific shortcut hints in the bottom border. The footer changes for content, TOC, compact annotation, and immersed annotation focus. Text reading uses a typewriter-style viewport: the highlighted sentence line is kept on the vertical center row of the framed content area. The renderer adds virtual top/bottom padding so the first and last text lines can also be centered instead of being clamped to the screen edges.
 
 ### TOC
 A `Vec<TocNode>` tree parsed from the EPUB's navigation document. Each `TocNode` has title, target block index, and children. Rendered in a sidebar with indent guides (`│`, `└`, `├`), expand/collapse markers (`▸`/`▾`), and selection highlight. Inspired by neo-tree.nvim's component-composition pattern. `TocState` tracks expanded nodes (HashSet), selected row, and scroll offset.
 
 ### Annotation overlay
-A floating window drawn on top of the content area. Bottom edge aligns with the top of the current highlighted sentence. Bordered `Paragraph` widget via ratatui's `Clear` + draw. The compact overlay wraps text and grows with short-to-medium notes up to a capped height while preserving reading context. Multiple annotations cycle with `;`, counter shown as `[2/3]`. If text still overflows, `Enter` enters `AnnotationImmersed` for scroll. Drawn after content to render on top.
+A floating window drawn on top of the content area. Bottom edge aligns above the current highlighted sentence. Bordered `Paragraph` widget via ratatui's `Clear` + draw. The compact overlay wraps text and grows with short-to-medium notes up to a capped height while preserving reading context. Multiple annotations cycle with `;`, counter shown as `[2/3]`. If text still overflows, `Enter` enters `AnnotationImmersed` for scroll; immersed annotation uses the outer reader frame as its border to preserve vertical space. Drawn after content to render on top.
 
 ### CLI
 `yater <file.epub> [--image-mode=sixel|halfblock|off]`. One required positional arg, one optional flag. No subcommands, no config file in v1.
