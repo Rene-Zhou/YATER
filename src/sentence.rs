@@ -4,6 +4,7 @@ pub fn segment_sentences(text: &str) -> Vec<(usize, usize)> {
     let mut start = 0;
     let mut chars = text.char_indices().peekable();
     let use_cjk_boundaries = text.chars().any(is_cjk_character);
+    let mut quote_state = QuoteState::default();
 
     while let Some((index, ch)) = chars.next() {
         let end = index + ch.len_utf8();
@@ -14,6 +15,9 @@ pub fn segment_sentences(text: &str) -> Vec<(usize, usize)> {
                 start = end;
             }
             '。' | '！' | '？' => {
+                if quote_state.is_inside_quote() && !is_followed_by_closing_quote(text, end) {
+                    continue;
+                }
                 match quoted_boundary(text, end) {
                     Some(QuotedBoundary::Delay) => {}
                     Some(QuotedBoundary::SplitAt(boundary_end)) => {
@@ -30,6 +34,9 @@ pub fn segment_sentences(text: &str) -> Vec<(usize, usize)> {
                 if let Some(&(next_index, '…')) = chars.peek() {
                     chars.next();
                     let end = next_index + '…'.len_utf8();
+                    if quote_state.is_inside_quote() && !is_followed_by_closing_quote(text, end) {
+                        continue;
+                    }
                     match quoted_boundary(text, end) {
                         Some(QuotedBoundary::Delay) => {}
                         Some(QuotedBoundary::SplitAt(boundary_end)) => {
@@ -43,7 +50,7 @@ pub fn segment_sentences(text: &str) -> Vec<(usize, usize)> {
                     }
                 }
             }
-            _ => {}
+            _ => quote_state.update(ch),
         }
     }
 
@@ -54,9 +61,50 @@ pub fn segment_sentences(text: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
+#[derive(Default)]
+struct QuoteState {
+    curly_double_depth: usize,
+    curly_single_depth: usize,
+    corner_double_depth: usize,
+    corner_single_depth: usize,
+    ascii_double_open: bool,
+    ascii_single_open: bool,
+}
+
+impl QuoteState {
+    fn update(&mut self, character: char) {
+        match character {
+            '“' => self.curly_double_depth += 1,
+            '”' => self.curly_double_depth = self.curly_double_depth.saturating_sub(1),
+            '‘' => self.curly_single_depth += 1,
+            '’' => self.curly_single_depth = self.curly_single_depth.saturating_sub(1),
+            '「' => self.corner_double_depth += 1,
+            '」' => self.corner_double_depth = self.corner_double_depth.saturating_sub(1),
+            '『' => self.corner_single_depth += 1,
+            '』' => self.corner_single_depth = self.corner_single_depth.saturating_sub(1),
+            '"' => self.ascii_double_open = !self.ascii_double_open,
+            '\'' => self.ascii_single_open = !self.ascii_single_open,
+            _ => {}
+        }
+    }
+
+    fn is_inside_quote(&self) -> bool {
+        self.curly_double_depth > 0
+            || self.curly_single_depth > 0
+            || self.corner_double_depth > 0
+            || self.corner_single_depth > 0
+            || self.ascii_double_open
+            || self.ascii_single_open
+    }
+}
+
 enum QuotedBoundary {
     Delay,
     SplitAt(usize),
+}
+
+fn is_followed_by_closing_quote(text: &str, boundary_end: usize) -> bool {
+    closing_quote_end(text, boundary_end) != boundary_end
 }
 
 fn quoted_boundary(text: &str, boundary_end: usize) -> Option<QuotedBoundary> {
@@ -141,9 +189,17 @@ fn is_dialogue_attribution(text: &str, start: usize) -> bool {
         return false;
     }
 
+    let first_clause = phrase
+        .split(|character| is_post_quote_continuation(character))
+        .next()
+        .unwrap_or(phrase);
+
     DIALOGUE_ATTRIBUTION_ENDINGS
         .iter()
         .any(|ending| phrase.ends_with(ending))
+        || DIALOGUE_ATTRIBUTION_MARKERS
+            .iter()
+            .any(|marker| first_clause.contains(marker))
 }
 
 fn is_opening_quote(character: char) -> bool {
@@ -198,6 +254,33 @@ const DIALOGUE_ATTRIBUTION_ENDINGS: &[&str] = &[
     "笑",
     "叹",
     "念",
+];
+
+const DIALOGUE_ATTRIBUTION_MARKERS: &[&str] = &[
+    "大吼着",
+    "低声说着",
+    "轻声说着",
+    "高声说着",
+    "悄声说着",
+    "嘟囔着",
+    "嘀咕着",
+    "咕哝着",
+    "喃喃着",
+    "尖叫着",
+    "回答着",
+    "解释着",
+    "抱怨着",
+    "说着",
+    "问着",
+    "答着",
+    "喊着",
+    "叫着",
+    "吼着",
+    "嚷着",
+    "骂着",
+    "笑着",
+    "叹着",
+    "念着",
 ];
 
 fn is_cjk_character(character: char) -> bool {
@@ -276,6 +359,25 @@ mod tests {
                 .map(|range| &text[range.0..range.1])
                 .collect::<Vec<_>>(),
             vec!["\"好吧！\"有个声音嘟囔道。", "下一句。"]
+        );
+    }
+
+    #[test]
+    fn keeps_multiple_terminals_inside_dialogue_quote_together() {
+        let text = "投德再度行礼。“你！快来！”它大吼着拉起囚具，男子步履蹒跚地跟着它。下一句。";
+
+        let ranges = segment_sentences(text);
+
+        assert_eq!(
+            ranges
+                .into_iter()
+                .map(|range| &text[range.0..range.1])
+                .collect::<Vec<_>>(),
+            vec![
+                "投德再度行礼。",
+                "“你！快来！”它大吼着拉起囚具，男子步履蹒跚地跟着它。",
+                "下一句。"
+            ]
         );
     }
 
