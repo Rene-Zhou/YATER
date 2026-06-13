@@ -108,6 +108,29 @@ fn toc_key_opens_toc_sidebar_in_the_runtime_frame() {
 }
 
 #[test]
+fn toc_key_focuses_the_current_reading_chapter() {
+    let mut app = App::new(reading_document());
+    let backend = TestBackend::new(32, 7);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    run_terminal_loop(
+        &mut terminal,
+        &mut app,
+        [
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        ],
+    )
+    .expect("run terminal");
+
+    assert_eq!(
+        highlighted_text(terminal.backend().buffer()),
+        "└ Section One"
+    );
+}
+
+#[test]
 fn navigation_scrolls_past_the_rendered_height_of_an_inline_image() {
     let document = Document {
         blocks: vec![

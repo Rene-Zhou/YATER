@@ -191,9 +191,7 @@ impl App {
             Action::JumpToChapterEnd => self.jump_to_chapter_end(),
             Action::OpenToc => {
                 self.focus = Focus::Toc;
-                self.selected_toc_row = self
-                    .selected_toc_row
-                    .min(self.visible_toc_targets().len().saturating_sub(1));
+                self.selected_toc_row = self.toc_row_for_current_position().unwrap_or(0);
             }
             Action::CloseToc => self.focus = Focus::Content,
             Action::NextTocItem => self.next_toc_item(),
@@ -443,6 +441,27 @@ impl App {
         }
 
         rows
+    }
+
+    fn toc_row_for_current_position(&self) -> Option<usize> {
+        let rows = self.visible_toc_rows();
+        if rows.is_empty() {
+            return None;
+        }
+
+        if let Some(index) = rows
+            .iter()
+            .position(|row| row.target_block_index == self.position.block_index)
+        {
+            return Some(index);
+        }
+
+        rows.iter()
+            .enumerate()
+            .filter(|(_, row)| row.target_block_index <= self.position.block_index)
+            .max_by_key(|(index, row)| (row.target_block_index, *index))
+            .map(|(index, _)| index)
+            .or(Some(0))
     }
 
     fn cycle_annotation(&mut self) {
@@ -1035,6 +1054,80 @@ mod tests {
                 sentence_offset: 0,
             }
         );
+    }
+
+    #[test]
+    fn opening_toc_selects_current_reading_chapter() {
+        let mut app = App::with_position(
+            Document {
+                blocks: vec![text_block("Chapter one."), text_block("Chapter two.")],
+                toc: vec![
+                    TocNode {
+                        title: "Chapter One".to_string(),
+                        target_block_index: 0,
+                        children: Vec::new(),
+                    },
+                    TocNode {
+                        title: "Chapter Two".to_string(),
+                        target_block_index: 1,
+                        children: Vec::new(),
+                    },
+                ],
+                annotations: HashMap::new(),
+                chapter_ranges: Vec::new(),
+            },
+            ReadingPosition {
+                block_index: 1,
+                sentence_offset: 0,
+            },
+        );
+
+        app.apply(Action::OpenToc);
+
+        assert_eq!(app.selected_toc_row(), 1);
+    }
+
+    #[test]
+    fn opening_toc_selects_visible_parent_when_current_section_is_collapsed() {
+        let mut app = App::with_position(
+            Document {
+                blocks: vec![
+                    text_block("Chapter one."),
+                    text_block("Section one."),
+                    text_block("Chapter two."),
+                ],
+                toc: vec![
+                    TocNode {
+                        title: "Chapter One".to_string(),
+                        target_block_index: 0,
+                        children: vec![TocNode {
+                            title: "Section One".to_string(),
+                            target_block_index: 1,
+                            children: Vec::new(),
+                        }],
+                    },
+                    TocNode {
+                        title: "Chapter Two".to_string(),
+                        target_block_index: 2,
+                        children: Vec::new(),
+                    },
+                ],
+                annotations: HashMap::new(),
+                chapter_ranges: Vec::new(),
+            },
+            ReadingPosition {
+                block_index: 1,
+                sentence_offset: 0,
+            },
+        );
+
+        app.apply(Action::OpenToc);
+        app.apply(Action::CollapseOrParentToc);
+        app.apply(Action::CollapseOrParentToc);
+        app.apply(Action::CloseToc);
+        app.apply(Action::OpenToc);
+
+        assert_eq!(app.selected_toc_row(), 0);
     }
 
     #[test]
