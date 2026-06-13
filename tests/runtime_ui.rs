@@ -74,7 +74,7 @@ fn paragraph_navigation_scrolls_the_runtime_frame_with_context() {
 }
 
 #[test]
-fn toc_key_opens_a_tree_sidebar_in_the_runtime_frame() {
+fn toc_key_opens_toc_in_the_runtime_frame() {
     let mut app = App::new(reading_document());
     let backend = TestBackend::new(32, 7);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -90,16 +90,17 @@ fn toc_key_opens_a_tree_sidebar_in_the_runtime_frame() {
     .expect("run terminal");
 
     assert_eq!(
-        region_snapshot(terminal.backend().buffer(), 1, 1, 20, 5),
+        frame_snapshot(terminal.backend().buffer()),
         concat!(
-            "▾ Chapter One\n",
-            "└ Section One\n",
-            "\n",
-            "\n",
-            ""
+            "┌  YATER | Chapter One─────────┐\n",
+            "│▾ Chapter One                 │\n",
+            "│└ Section One                 │\n",
+            "│                              │\n",
+            "│                              │\n",
+            "│                              │\n",
+            "└  TOC j/k | Enter | Esc───────┘"
         )
     );
-    assert!(frame_snapshot(terminal.backend().buffer()).contains("TOC j/k | Enter"));
     assert_eq!(
         highlighted_text(terminal.backend().buffer()),
         "▾ Chapter One"
@@ -526,25 +527,6 @@ fn highlighted_text(buffer: &ratatui::buffer::Buffer) -> String {
         })
         .map(|cell| cell.symbol())
         .collect()
-}
-
-fn region_snapshot(
-    buffer: &ratatui::buffer::Buffer,
-    x: u16,
-    y: u16,
-    width: u16,
-    height: u16,
-) -> String {
-    (y..y + height)
-        .map(|row| {
-            (x..x + width)
-                .map(|column| buffer[(column, row)].symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn test_png_bytes(width: u32, height: u32) -> Vec<u8> {

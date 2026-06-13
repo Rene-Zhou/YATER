@@ -36,27 +36,27 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
 
     frame.render_widget(shell, area);
 
-    let (reading_content, annotation_area) = annotation_layout(app, content);
-
-    if !draw_current_image(frame, reading_content, app) {
-        let scroll = content_scroll_offset(app, reading_content);
-        frame.render_widget(
-            Paragraph::new(current_content_lines(app, reading_content))
-                .wrap(Wrap { trim: false })
-                .scroll((scroll, 0)),
-            reading_content,
-        );
-    }
-
     if app.focus() == Focus::Toc {
         draw_toc(frame, content, app);
-    }
+    } else {
+        let (reading_content, annotation_area) = annotation_layout(app, content);
 
-    if matches!(
-        app.focus(),
-        Focus::AnnotationOverlay | Focus::AnnotationImmersed
-    ) {
-        draw_annotation_overlay(frame, annotation_area, app);
+        if !draw_current_image(frame, reading_content, app) {
+            let scroll = content_scroll_offset(app, reading_content);
+            frame.render_widget(
+                Paragraph::new(current_content_lines(app, reading_content))
+                    .wrap(Wrap { trim: false })
+                    .scroll((scroll, 0)),
+                reading_content,
+            );
+        }
+
+        if matches!(
+            app.focus(),
+            Focus::AnnotationOverlay | Focus::AnnotationImmersed
+        ) {
+            draw_annotation_overlay(frame, annotation_area, app);
+        }
     }
 }
 
@@ -527,13 +527,6 @@ fn rgba_to_color([red, green, blue, alpha]: [u8; 4]) -> Color {
 }
 
 fn draw_toc(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) {
-    let width = (content.width / 3).max(20).min(content.width);
-    let area = Rect {
-        x: content.x,
-        y: content.y,
-        width,
-        height: content.height,
-    };
     let mut rows = Vec::new();
     let toc = app.document().toc.as_slice();
 
@@ -549,9 +542,13 @@ fn draw_toc(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) {
         );
     }
 
-    frame.render_widget(Clear, area);
-    let scroll = toc_scroll_offset(app.selected_toc_row(), area.height);
-    frame.render_widget(Paragraph::new(rows).scroll((scroll, 0)), area);
+    let scroll = toc_scroll_offset(app.selected_toc_row(), content.height);
+    frame.render_widget(
+        Paragraph::new(rows)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
+        content,
+    );
 }
 
 fn toc_scroll_offset(selected_row: usize, visible_height: u16) -> u16 {
@@ -1089,7 +1086,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_toc_sidebar_when_toc_has_focus() {
+    fn renders_toc_view_when_toc_has_focus() {
         let mut app = App::new(test_document());
         app.apply(Action::OpenToc);
         let backend = TestBackend::new(60, 8);
@@ -1100,6 +1097,7 @@ mod tests {
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("▾ Chapter One"));
         assert!(rendered.contains("└ Section One"));
+        assert!(!rendered.contains("First sentence."));
     }
 
     #[test]
@@ -1133,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn scrolls_toc_sidebar_to_selected_row() {
+    fn scrolls_toc_view_to_selected_row() {
         let mut app = App::new(long_toc_document());
         app.apply(Action::OpenToc);
         for _ in 0..6 {

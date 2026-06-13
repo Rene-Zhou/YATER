@@ -127,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn toc_mode_maps_sidebar_navigation_keys() {
+    fn toc_mode_maps_navigation_keys() {
         let cases = [
             (KeyCode::Char('j'), Action::NextTocItem),
             (KeyCode::Down, Action::NextTocItem),

@@ -13,7 +13,7 @@ A footnote or endnote extracted from the EPUB at parse time. Stored as plain tex
 
 Annotation discovery supports EPUB structural semantics (`epub:type="footnote|endnote"`), DPUB-ARIA roles (`doc-footnote`, `doc-endnote`, and entries under `doc-endnotes`), and EPUB2-style reciprocal fragment links where a note marker links to a note block whose leading link returns to the source marker. `doc-backlink` links and reciprocal return markers are excluded from displayed annotation text.
 
-Parsed annotation markers remain in the reading text and are rendered bold and underlined so numeric markers such as `205`, bracketed markers such as `[1]`, superscript digits, and symbol markers are visibly distinguishable from ordinary text. The current sentence's reverse-video highlight composes with the marker style.
+Parsed annotation markers remain in the reading text and are rendered bold and underlined so numeric markers such as `205`, bracketed markers such as `[1]`, superscript digits, and symbol markers are visibly distinguishable from ordinary text. The current sentence's violet text highlight composes with the marker style.
 
 ### AnnotationRef
 Metadata attached to a `TextBlock`. Points into the `AnnotationStore` by ID and records the character offset of the anchor within the block's plain text. Enables the renderer to highlight the anchor and look up the annotation text on `;`.
@@ -22,13 +22,13 @@ Metadata attached to a `TextBlock`. Points into the `AnnotationStore` by ID and 
 A top-level `HashMap<String, String>` mapping document-qualified annotation IDs (normalized XHTML path plus fragment) to their pre-extracted plain text. EPUB fragment IDs are local to an XHTML document, so qualification prevents same-named notes in different files from colliding. Populated once at parse time.
 
 ### Focus
-An enum representing which UI component currently owns keyboard input. Four variants: `Content` (reading), `Toc` (sidebar navigation), `AnnotationOverlay` (floating footnote), `AnnotationImmersed` (deep reading inside annotation). Transitions are explicit: `Tab` toggles `Content`/`Toc`, `;` enters `AnnotationOverlay` from `Content`, `Enter` deepens to `AnnotationImmersed`, `Esc` pops back one level.
+An enum representing which UI component currently owns keyboard input. Four variants: `Content` (reading), `Toc` (table-of-contents navigation), `AnnotationOverlay` (floating footnote), `AnnotationImmersed` (deep reading inside annotation). Transitions are explicit: `Tab` toggles `Content`/`Toc`, `;` enters `AnnotationOverlay` from `Content`, `Enter` deepens to `AnnotationImmersed`, `Esc` pops back one level.
 
 ### Parse strategy
 Eager full-parse at file open. The entire EPUB is walked spine-order, all chapters converted to Blocks, all annotations extracted into the AnnotationStore, before any rendering begins.
 
 ### Sentence
-A rendering-time concern, not a persisted data structure. Segmented on the fly from a `TextBlock` for the purpose of sentence-level highlighting. Segmentation follows the standard Chinese definition of 句子: boundaries only at `。`, `？`, `！`, and `……` (ellipsis). Commas (`，`), semicolons (`；`), enumeration marks (`、`) are clause-internal, not sentence boundaries. For English text, boundaries at `.`, `!`, `?`. Returns byte-offset ranges, not new strings.
+A rendering-time concern, not a persisted data structure. Segmented on the fly from a `TextBlock` for the purpose of sentence-level highlighting. Segmentation follows the standard Chinese definition of 句子: boundaries only at `。`, `？`, `！`, and `……` (ellipsis). Commas (`，`), semicolons (`；`), enumeration marks (`、`) are clause-internal, not sentence boundaries. Quoted Chinese dialogue keeps inner terminal punctuation together until the closing quote and may include a following attribution phrase. For English text, boundaries at `.`, `!`, `?`. Returns byte-offset ranges, not new strings.
 
 ### Module structure
 Single crate. `app.rs` owns the main loop and Focus state machine. `epub/` handles parsing. `document/` holds data structures. `render/` does ratatui drawing. `input.rs` maps keys per Focus variant. `sentence.rs` segments text. `image.rs` handles terminal image rendering. Synchronous main loop, no event bus.
@@ -43,7 +43,7 @@ Save reading position to `$XDG_DATA_HOME/yater/progress.json`. Keyed by file pat
 Text reading is framed by a full-screen `Block` with the current chapter in the top border and focus-specific shortcut hints in the bottom border. The top title and footer are left-biased with a small inset instead of centered. The footer changes for content, TOC, compact annotation, and immersed annotation focus. Text reading uses a typewriter-style viewport: the highlighted sentence line is kept on the vertical center row of the framed content area. Current sentence and TOC selection use `#a97df4` violet text only, without bold, background tint, or terminal reverse video. The renderer adds virtual top/bottom padding so the first and last text lines can also be centered instead of being clamped to the screen edges.
 
 ### TOC
-A `Vec<TocNode>` tree parsed from the EPUB's navigation document. Each `TocNode` has title, target block index, and children. Rendered in a sidebar with indent guides (`│`, `└`, `├`), expand/collapse markers (`▸`/`▾`), and selection highlight. Inspired by neo-tree.nvim's component-composition pattern. `TocState` tracks expanded nodes (HashSet), selected row, and scroll offset.
+A `Vec<TocNode>` tree parsed from the EPUB's navigation document. Each `TocNode` has title, target block index, and children. Rendered as a full-width content view inside the same outer reader frame, with indent guides (`│`, `└`, `├`), expand/collapse markers (`▸`/`▾`), and the same violet selection highlight used by the reader focus sentence. `TocState` tracks expanded nodes (HashSet), selected row, and scroll offset.
 
 ### Annotation overlay
 A floating window drawn on top of the content area. Bottom edge aligns above the current highlighted sentence. Bordered `Paragraph` widget via ratatui's `Clear` + draw. The compact overlay wraps text and grows with short-to-medium notes up to a capped height while preserving reading context. Multiple annotations cycle with `;`, counter shown as `[2/3]`. If text still overflows, `Enter` enters `AnnotationImmersed` for scroll; immersed annotation uses the outer reader frame as its border to preserve vertical space. Drawn after content to render on top.
@@ -61,7 +61,7 @@ Content: `j`/`k` sentence nav, `h`/`l` paragraph nav, `u`/`n` page up/down, `i`/
 Maps chapter index to `(start_block, end_block)` range in the flat block list. Computed once at parse time. Each `Block` stores its chapter index. Enables `i`/`m` chapter navigation.
 
 ### Screen layout
-Minimal. Top bar (1 row, centered chapter name) + content area. TOC sidebar (~30% width) overlays left side when open. No bottom bar, no line numbers, no progress percentage in v1.
+Minimal. A single full-screen outer frame contains the top title, content area, and bottom shortcut footer. Reading, TOC, and immersed annotation modes reuse that frame instead of introducing separate chrome. Compact annotations are the only inner floating window. No line numbers or progress percentage in v1.
 
 ## Reference
 
