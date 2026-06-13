@@ -74,7 +74,7 @@ fn paragraph_navigation_scrolls_the_runtime_frame_with_context() {
 }
 
 #[test]
-fn toc_key_opens_toc_in_the_runtime_frame() {
+fn toc_key_opens_toc_sidebar_in_the_runtime_frame() {
     let mut app = App::new(reading_document());
     let backend = TestBackend::new(32, 7);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -93,11 +93,11 @@ fn toc_key_opens_toc_in_the_runtime_frame() {
         frame_snapshot(terminal.backend().buffer()),
         concat!(
             "┌  YATER | Chapter One─────────┐\n",
-            "│▾ Chapter One                 │\n",
-            "│└ Section One                 │\n",
-            "│                              │\n",
-            "│                              │\n",
-            "│                              │\n",
+            "│▾ Chapter One       │         │\n",
+            "│└ Section One       │         │\n",
+            "│                    │Heading. │\n",
+            "│                    │First    │\n",
+            "│                    │paragraph│\n",
             "└  TOC j/k | Enter | Esc───────┘"
         )
     );

@@ -36,27 +36,37 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
 
     frame.render_widget(shell, area);
 
-    if app.focus() == Focus::Toc {
-        draw_toc(frame, content, app);
+    let (reading_area, toc_area, divider_area) = if app.focus() == Focus::Toc {
+        toc_layout(content)
     } else {
-        let (reading_content, annotation_area) = annotation_layout(app, content);
+        (content, None, None)
+    };
+    let (reading_content, annotation_area) = annotation_layout(app, reading_area);
 
-        if !draw_current_image(frame, reading_content, app) {
-            let scroll = content_scroll_offset(app, reading_content);
-            frame.render_widget(
-                Paragraph::new(current_content_lines(app, reading_content))
-                    .wrap(Wrap { trim: false })
-                    .scroll((scroll, 0)),
-                reading_content,
-            );
-        }
+    if !draw_current_image(frame, reading_content, app) {
+        let scroll = content_scroll_offset(app, reading_content);
+        frame.render_widget(
+            Paragraph::new(current_content_lines(app, reading_content))
+                .wrap(Wrap { trim: false })
+                .scroll((scroll, 0)),
+            reading_content,
+        );
+    }
 
-        if matches!(
-            app.focus(),
-            Focus::AnnotationOverlay | Focus::AnnotationImmersed
-        ) {
-            draw_annotation_overlay(frame, annotation_area, app);
+    if app.focus() == Focus::Toc {
+        if let Some(area) = toc_area {
+            draw_toc(frame, area, app);
         }
+        if let Some(area) = divider_area {
+            frame.render_widget(toc_divider(area.height), area);
+        }
+    }
+
+    if matches!(
+        app.focus(),
+        Focus::AnnotationOverlay | Focus::AnnotationImmersed
+    ) {
+        draw_annotation_overlay(frame, annotation_area, app);
     }
 }
 
@@ -196,8 +206,9 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
         match document.blocks.get(block_index) {
             Some(Block::Text(block)) => {
                 let mut block_lines = vec![Vec::new()];
-                let highlighted_sentence_offset =
-                    (block_index == position.block_index).then_some(position.sentence_offset);
+                let highlighted_sentence_offset = (app.focus() != Focus::Toc
+                    && block_index == position.block_index)
+                    .then_some(position.sentence_offset);
                 let mut cursor = 0;
                 for range in segment_sentences(&block.text) {
                     if cursor < range.0 {
@@ -542,6 +553,7 @@ fn draw_toc(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) {
         );
     }
 
+    frame.render_widget(Clear, content);
     let scroll = toc_scroll_offset(app.selected_toc_row(), content.height);
     frame.render_widget(
         Paragraph::new(rows)
@@ -549,6 +561,59 @@ fn draw_toc(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) {
             .scroll((scroll, 0)),
         content,
     );
+}
+
+fn toc_layout(content: Rect) -> (Rect, Option<Rect>, Option<Rect>) {
+    if content.width <= 12 {
+        return (content, Some(content), None);
+    }
+
+    let sidebar_width = toc_sidebar_width(content.width);
+    let divider_width = (sidebar_width < content.width).then_some(1).unwrap_or(0);
+    let reading_width = content
+        .width
+        .saturating_sub(sidebar_width)
+        .saturating_sub(divider_width);
+    let toc_area = Rect {
+        x: content.x,
+        y: content.y,
+        width: sidebar_width,
+        height: content.height,
+    };
+    let divider_area = (divider_width > 0).then_some(Rect {
+        x: content.x.saturating_add(sidebar_width),
+        y: content.y,
+        width: divider_width,
+        height: content.height,
+    });
+    let reading_area = Rect {
+        x: content
+            .x
+            .saturating_add(sidebar_width)
+            .saturating_add(divider_width),
+        y: content.y,
+        width: reading_width,
+        height: content.height,
+    };
+
+    (reading_area, Some(toc_area), divider_area)
+}
+
+fn toc_sidebar_width(content_width: u16) -> u16 {
+    let preferred_width = (content_width / 3).max(20);
+    if content_width <= 12 {
+        content_width
+    } else {
+        preferred_width.min(content_width.saturating_sub(8))
+    }
+}
+
+fn toc_divider(height: u16) -> Paragraph<'static> {
+    Paragraph::new(
+        (0..height)
+            .map(|_| Line::from(Span::styled("│", Style::default().fg(Color::DarkGray))))
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn toc_scroll_offset(selected_row: usize, visible_height: u16) -> u16 {
@@ -1086,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_toc_view_when_toc_has_focus() {
+    fn renders_toc_sidebar_when_toc_has_focus() {
         let mut app = App::new(test_document());
         app.apply(Action::OpenToc);
         let backend = TestBackend::new(60, 8);
@@ -1097,7 +1162,7 @@ mod tests {
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("▾ Chapter One"));
         assert!(rendered.contains("└ Section One"));
-        assert!(!rendered.contains("First sentence."));
+        assert!(rendered.contains("First sentence."));
     }
 
     #[test]
@@ -1131,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    fn scrolls_toc_view_to_selected_row() {
+    fn scrolls_toc_sidebar_to_selected_row() {
         let mut app = App::new(long_toc_document());
         app.apply(Action::OpenToc);
         for _ in 0..6 {
