@@ -38,7 +38,7 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
 
-      - name: Run tests
+      - name: Run tests, including EPUB corpus
         run: cargo test --locked
 
       - name: Build release binary
