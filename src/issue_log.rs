@@ -56,7 +56,7 @@ pub fn issue_log_path_from_env(
 mod tests {
     use std::path::Path;
 
-    use super::{issue_log_path_from_env, IssueLog};
+    use super::{IssueLog, issue_log_path_from_env};
 
     #[test]
     fn issue_log_path_prefers_xdg_state_home() {

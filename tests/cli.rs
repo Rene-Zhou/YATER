@@ -1,11 +1,11 @@
 use std::process::Command;
 
-use tempfile::tempdir;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use zip::write::SimpleFileOptions;
+use tempfile::tempdir;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 #[test]
 fn version_flag_prints_package_version() {

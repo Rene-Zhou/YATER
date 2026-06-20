@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::app::App;
 use crate::document::Document;
 use crate::image::SelectedImageMode;
-use crate::input::{map_key, Action};
+use crate::input::{Action, map_key};
 use crate::progress::Progress;
 use crate::render;
 
@@ -160,16 +160,15 @@ impl EventSource for CrosstermEventSource {
             return Ok(RuntimeEvent::ProgressDebounceElapsed);
         }
 
-        let first_event = crossterm::event::read()
-            .map_err(|error| RuntimeError::new(error.to_string()))?;
+        let first_event =
+            crossterm::event::read().map_err(|error| RuntimeError::new(error.to_string()))?;
         let mut ready_events = vec![first_event];
 
         while crossterm::event::poll(Duration::ZERO)
             .map_err(|error| RuntimeError::new(error.to_string()))?
         {
             ready_events.push(
-                crossterm::event::read()
-                    .map_err(|error| RuntimeError::new(error.to_string()))?,
+                crossterm::event::read().map_err(|error| RuntimeError::new(error.to_string()))?,
             );
         }
 
@@ -390,10 +389,10 @@ mod tests {
     use std::path::Path;
 
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use ratatui::Terminal;
     use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
     use ratatui::buffer::Cell;
     use ratatui::layout::{Position, Size};
-    use ratatui::Terminal;
 
     use crate::app::App;
     use crate::document::{AnnotationRef, Block, Document, TextBlock, TocNode};
@@ -401,7 +400,7 @@ mod tests {
     use crate::input::Focus;
     use crate::progress::Progress;
 
-    use super::{build_app, EventSource, RuntimeError, RuntimeEvent};
+    use super::{EventSource, RuntimeError, RuntimeEvent, build_app};
 
     struct VecEventSource {
         events: Vec<RuntimeEvent>,
@@ -639,10 +638,8 @@ mod tests {
         )
         .expect("build app");
 
-        let should_quit = super::handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
-        );
+        let should_quit =
+            super::handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
         assert!(!should_quit);
         assert_eq!(app.focus(), Focus::Toc);
@@ -793,8 +790,10 @@ mod tests {
         super::run_terminal_loop(
             &mut terminal,
             &mut app,
-            [KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)],
+            [
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+            ],
         )
         .expect("run terminal loop");
 

@@ -96,7 +96,9 @@ fn best_toc_node_for_block(node: &TocNode, block_index: usize) -> Option<&TocNod
 
 #[cfg(test)]
 mod tests {
-    use super::{AnnotationRef, AnnotationStore, Block, ChapterRange, Document, TextBlock, TocNode};
+    use super::{
+        AnnotationRef, AnnotationStore, Block, ChapterRange, Document, TextBlock, TocNode,
+    };
 
     #[test]
     fn exposes_current_chapter_title_and_text_annotations() {
@@ -120,7 +122,9 @@ mod tests {
 
         assert_eq!(document.chapter_title_for_block(0), Some("Chapter One"));
         assert_eq!(
-            document.text_block(0).map(|block| block.annotations.as_slice()),
+            document
+                .text_block(0)
+                .map(|block| block.annotations.as_slice()),
             Some(
                 [AnnotationRef {
                     id: "note-1".to_string(),

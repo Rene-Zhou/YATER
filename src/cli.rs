@@ -57,7 +57,7 @@ impl From<ImageModeOverride> for ImageMode {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{parse_from, ImageMode};
+    use super::{ImageMode, parse_from};
 
     #[test]
     fn parses_epub_path_and_image_mode_override() {

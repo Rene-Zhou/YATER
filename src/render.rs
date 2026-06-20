@@ -118,9 +118,7 @@ fn shortcut_footer(focus: Focus, width: u16) -> Line<'static> {
                 "NOTE ; next | Enter full | Esc"
             }
         }
-        (Focus::AnnotationOverlay, _) => {
-            "NOTE ; next note | Enter expand | Esc/other close"
-        }
+        (Focus::AnnotationOverlay, _) => "NOTE ; next note | Enter expand | Esc/other close",
         (Focus::AnnotationImmersed, width) if width < 44 => "NOTE j/k | Esc",
         (Focus::AnnotationImmersed, width) if width < 54 => "NOTE j/k scroll | Esc",
         (Focus::AnnotationImmersed, _) => "NOTE j/k scroll note | Up/Down scroll | Esc compact",
@@ -224,13 +222,7 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
                     } else {
                         Style::default()
                     };
-                    push_sentence_span_lines(
-                        &mut block_lines,
-                        block,
-                        range,
-                        style,
-                        document,
-                    );
+                    push_sentence_span_lines(&mut block_lines, block, range, style, document);
                     cursor = range.1;
                 }
 
@@ -351,16 +343,7 @@ fn annotation_marker_end(text: &str, start: usize, limit: usize) -> usize {
 fn is_super_or_subscript_digit(character: char) -> bool {
     matches!(
         character,
-        '⁰' | '¹'
-            | '²'
-            | '³'
-            | '⁴'
-            | '⁵'
-            | '⁶'
-            | '⁷'
-            | '⁸'
-            | '⁹'
-            | '₀'..='₉'
+        '⁰' | '¹' | '²' | '³' | '⁴' | '⁵' | '⁶' | '⁷' | '⁸' | '⁹' | '₀'..='₉'
     )
 }
 
@@ -747,7 +730,10 @@ fn compact_annotation_height(app: &App, content: Rect) -> u16 {
     let inner_width = usize::from(content.width.min(50).saturating_sub(2).max(1));
     let text_height = annotation_text_display_height(&annotation.display_text(), inner_width);
 
-    (text_height as u16).saturating_add(2).max(3).min(max_height)
+    (text_height as u16)
+        .saturating_add(2)
+        .max(3)
+        .min(max_height)
 }
 
 fn annotation_text_display_height(text: &str, width: usize) -> usize {
@@ -939,9 +925,9 @@ mod tests {
     use std::collections::HashMap;
     use std::io::Cursor;
 
+    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::{Color, Modifier};
-    use ratatui::Terminal;
 
     use crate::app::{App, ReadingPosition};
     use crate::document::{
@@ -1029,11 +1015,10 @@ mod tests {
         terminal.draw(|frame| draw(frame, &app)).expect("draw");
 
         for marker in ["205", "[12]", "¹⁴", "*"] {
-            assert!(text_has_modifier(
-                terminal.backend().buffer(),
-                marker,
-                Modifier::UNDERLINED,
-            ), "marker {marker:?}");
+            assert!(
+                text_has_modifier(terminal.backend().buffer(), marker, Modifier::UNDERLINED,),
+                "marker {marker:?}"
+            );
         }
         assert!(text_has_modifier(
             terminal.backend().buffer(),
@@ -1135,7 +1120,11 @@ mod tests {
         let rows = buffer_rows(terminal.backend().buffer());
         assert!(rows.iter().any(|row| row.contains("First line.")));
         assert!(rows.iter().any(|row| row.contains("Second line.")));
-        assert!(!rows.iter().any(|row| row.contains("First line.Second line.")));
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains("First line.Second line."))
+        );
     }
 
     #[test]
@@ -1401,8 +1390,8 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         let highlighted_row = row_index_with_highlight(buffer).expect("highlighted sentence row");
-        let overlay_bottom_row = row_index_containing_text(buffer, "└")
-            .expect("overlay bottom border row");
+        let overlay_bottom_row =
+            row_index_containing_text(buffer, "└").expect("overlay bottom border row");
 
         assert!(overlay_bottom_row < highlighted_row);
     }
@@ -1676,12 +1665,14 @@ mod tests {
 
         terminal.draw(|frame| draw(frame, &app)).expect("draw");
 
-        assert!(terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .any(|cell| cell.fg == Color::Rgb(0, 0, 255)));
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .any(|cell| cell.fg == Color::Rgb(0, 0, 255))
+        );
     }
 
     #[test]
@@ -1847,11 +1838,7 @@ mod tests {
             })
     }
 
-    fn text_has_modifier(
-        buffer: &ratatui::buffer::Buffer,
-        text: &str,
-        modifier: Modifier,
-    ) -> bool {
+    fn text_has_modifier(buffer: &ratatui::buffer::Buffer, text: &str, modifier: Modifier) -> bool {
         buffer
             .content()
             .iter()

@@ -6,8 +6,8 @@ use std::path::Path;
 use std::process::Command;
 
 use tempfile::tempdir;
-use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 #[test]
 fn binary_renders_and_restores_a_real_pty_without_graphics_queries_when_images_are_off() {
@@ -38,7 +38,10 @@ fn binary_renders_and_restores_a_real_pty_without_graphics_queries_when_images_a
         "reader failed: {}\nPTY output: {screen:?}",
         String::from_utf8_lossy(&output.stderr),
     );
-    assert!(screen.contains("\u{1b}[?1049h"), "did not enter alternate screen");
+    assert!(
+        screen.contains("\u{1b}[?1049h"),
+        "did not enter alternate screen"
+    );
     assert_eq!(
         AnsiScreen::capture(&output.stdout, 40, 8).snapshot(),
         concat!(
@@ -52,7 +55,10 @@ fn binary_renders_and_restores_a_real_pty_without_graphics_queries_when_images_a
             "  READ j/k | ; | Tab | q"
         )
     );
-    assert!(screen.contains("\u{1b}[?1049l"), "did not leave alternate screen");
+    assert!(
+        screen.contains("\u{1b}[?1049l"),
+        "did not leave alternate screen"
+    );
     assert!(
         !screen.contains("\u{1b}_G")
             && !screen.contains("\u{1b}[c")

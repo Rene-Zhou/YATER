@@ -35,8 +35,7 @@ pub fn open_with_issue_logger(
     let opf_base = zip_parent(&opf_path);
 
     let package = parse_package(&opf_xml)?;
-    let legacy_annotation_ids =
-        discover_legacy_annotation_ids(&mut archive, &package, &opf_base);
+    let legacy_annotation_ids = discover_legacy_annotation_ids(&mut archive, &package, &opf_base);
     let empty_annotation_ids = HashSet::new();
     let mut blocks = Vec::new();
     let mut annotations = AnnotationStore::new();
@@ -99,7 +98,10 @@ pub fn open_with_issue_logger(
         .collect::<HashSet<_>>();
     for (id, item) in &package.manifest {
         if spine_idrefs.contains(id.as_str())
-            || item.properties.split_whitespace().any(|value| value == "nav")
+            || item
+                .properties
+                .split_whitespace()
+                .any(|value| value == "nav")
             || item.media_type != "application/xhtml+xml"
         {
             continue;
@@ -164,11 +166,11 @@ struct Package {
 impl Package {
     fn toc_items(&self) -> Vec<(&ManifestItem, TocFormat)> {
         let mut items = Vec::new();
-        if let Some(nav_item) = self
-            .manifest
-            .values()
-            .find(|item| item.properties.split_whitespace().any(|value| value == "nav"))
-        {
+        if let Some(nav_item) = self.manifest.values().find(|item| {
+            item.properties
+                .split_whitespace()
+                .any(|value| value == "nav")
+        }) {
             items.push((nav_item, TocFormat::Nav));
         }
 
@@ -380,10 +382,7 @@ fn discover_legacy_annotation_ids(
         let Some(backlink) = links.get(&link.target) else {
             continue;
         };
-        if backlink.target != *source
-            || !backlink.is_leading_in_block
-            || link.is_leading_in_block
-        {
+        if backlink.target != *source || !backlink.is_leading_in_block || link.is_leading_in_block {
             continue;
         }
         let Some((document_path, id)) = link.target.rsplit_once('#') else {
@@ -407,9 +406,10 @@ fn is_leading_link_in_text_block(anchor: roxmltree::Node<'_, '_>) -> bool {
         return false;
     };
 
-    !container.descendants().take_while(|node| *node != anchor).any(|node| {
-        node.is_text() && node.text().is_some_and(|text| !text.trim().is_empty())
-    })
+    !container
+        .descendants()
+        .take_while(|node| *node != anchor)
+        .any(|node| node.is_text() && node.text().is_some_and(|text| !text.trim().is_empty()))
 }
 
 fn parse_xhtml_chapter(
@@ -422,8 +422,7 @@ fn parse_xhtml_chapter(
     let document = roxmltree::Document::parse(xhtml)
         .map_err(|error| EpubError(format!("invalid XHTML chapter: {error}")))?;
     let mut blocks = Vec::new();
-    let annotations =
-        annotations_from_document(&document, chapter_path, legacy_annotation_ids);
+    let annotations = annotations_from_document(&document, chapter_path, legacy_annotation_ids);
     let mut fragment_targets = HashMap::new();
 
     append_chapter_blocks(
@@ -467,10 +466,7 @@ fn annotations_from_document(
 
     for node in document
         .descendants()
-        .filter(|node| {
-            node.is_element()
-                && is_annotation_container(*node, legacy_annotation_ids)
-        })
+        .filter(|node| node.is_element() && is_annotation_container(*node, legacy_annotation_ids))
     {
         let annotation_id = node.attribute("id").or_else(|| {
             node.descendants()
@@ -514,11 +510,7 @@ fn parse_toc(
         return Ok(Vec::new());
     };
 
-    Ok(parse_toc_list(
-        root_list,
-        nav_path,
-        target_blocks_by_href,
-    ))
+    Ok(parse_toc_list(root_list, nav_path, target_blocks_by_href))
 }
 
 fn is_toc_nav(node: roxmltree::Node<'_, '_>) -> bool {
@@ -629,8 +621,7 @@ fn parse_ncx_nav_point(
 fn is_text_block_element(name: &str) -> bool {
     matches!(
         name,
-        "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "div" | "figure" | "blockquote"
-            | "li"
+        "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "div" | "figure" | "blockquote" | "li"
     )
 }
 
@@ -679,23 +670,12 @@ fn is_annotation_container(
     node: roxmltree::Node<'_, '_>,
     legacy_annotation_ids: &HashSet<String>,
 ) -> bool {
-    let is_annotation_collection = attribute_contains_any_token(
-        node,
-        "role",
-        &["doc-endnotes"],
-    ) || attribute_contains_any_token(
-        node,
-        "type",
-        &["endnotes", "rearnotes"],
-    );
+    let is_annotation_collection = attribute_contains_any_token(node, "role", &["doc-endnotes"])
+        || attribute_contains_any_token(node, "type", &["endnotes", "rearnotes"]);
     let is_semantic_annotation = node.attribute("id").is_some()
         && (matches!(node.tag_name().name(), "aside" | "note")
             || attribute_contains_any_token(node, "type", &["footnote", "endnote"])
-            || attribute_contains_any_token(
-                node,
-                "role",
-                &["doc-footnote", "doc-endnote"],
-            ));
+            || attribute_contains_any_token(node, "role", &["doc-footnote", "doc-endnote"]));
     let is_legacy_annotation = is_text_block_element(node.tag_name().name())
         && node.descendants().any(|descendant| {
             descendant.is_element()
@@ -708,11 +688,7 @@ fn is_annotation_container(
         && node.ancestors().skip(1).any(|ancestor| {
             ancestor.is_element()
                 && (attribute_contains_any_token(ancestor, "role", &["doc-endnotes"])
-                    || attribute_contains_any_token(
-                        ancestor,
-                        "type",
-                        &["endnotes", "rearnotes"],
-                    ))
+                    || attribute_contains_any_token(ancestor, "type", &["endnotes", "rearnotes"]))
         });
 
     is_annotation_collection
@@ -739,12 +715,9 @@ fn has_annotation_ancestor(
     node: roxmltree::Node<'_, '_>,
     legacy_annotation_ids: &HashSet<String>,
 ) -> bool {
-    node.ancestors()
-        .skip(1)
-        .any(|ancestor| {
-            ancestor.is_element()
-                && is_annotation_container(ancestor, legacy_annotation_ids)
-        })
+    node.ancestors().skip(1).any(|ancestor| {
+        ancestor.is_element() && is_annotation_container(ancestor, legacy_annotation_ids)
+    })
 }
 
 fn is_non_visible_element(node: roxmltree::Node<'_, '_>) -> bool {
@@ -1748,10 +1721,7 @@ mod tests {
             document.text_block(0).map(|block| block.text.as_str()),
             Some("Text with [1].")
         );
-        assert_eq!(
-            document.annotation_text("OEBPS/notes.xhtml#note-1"),
-            None
-        );
+        assert_eq!(document.annotation_text("OEBPS/notes.xhtml#note-1"), None);
         assert_eq!(issues.len(), 1);
         assert!(issues[0].contains("malformed HTML: OEBPS/notes.xhtml"));
     }
@@ -1793,10 +1763,7 @@ mod tests {
             document.text_block(0).map(|block| block.text.as_str()),
             Some("Text with [1].")
         );
-        assert_eq!(
-            document.annotation_text("OEBPS/notes.xhtml#note-1"),
-            None
-        );
+        assert_eq!(document.annotation_text("OEBPS/notes.xhtml#note-1"), None);
         assert_eq!(issues.len(), 1);
         assert!(issues[0].contains("malformed HTML: OEBPS/notes.xhtml"));
     }
@@ -2004,10 +1971,13 @@ mod tests {
             &document.blocks[0],
             Block::Text(block) if block.text == "[malformed chapter: OEBPS/chapter1.xhtml]"
         ));
-        assert_eq!(document.chapter_range_for_block(0), Some(ChapterRange {
-            start_block: 0,
-            end_block: 0,
-        }));
+        assert_eq!(
+            document.chapter_range_for_block(0),
+            Some(ChapterRange {
+                start_block: 0,
+                end_block: 0,
+            })
+        );
         assert_eq!(issues.len(), 1);
         assert!(issues[0].contains("malformed HTML: OEBPS/chapter1.xhtml"));
     }
@@ -2648,12 +2618,7 @@ mod tests {
         let file = File::create(path).expect("create epub");
         let mut writer = ZipWriter::new(file);
 
-        write_zip_file(
-            &mut writer,
-            options,
-            "mimetype",
-            "application/epub+zip",
-        );
+        write_zip_file(&mut writer, options, "mimetype", "application/epub+zip");
         write_zip_file(
             &mut writer,
             options,
@@ -2688,9 +2653,13 @@ mod tests {
                     .chain(extra_files.iter().map(|(id, href, media_type, _)| format!(
                         r#"    <item id="{id}" href="{href}" media-type="{media_type}"/>"#
                     )))
-                    .chain(missing_extra_files.iter().map(|(id, href, media_type)| format!(
-                        r#"    <item id="{id}" href="{href}" media-type="{media_type}"/>"#
-                    )))
+                    .chain(
+                        missing_extra_files
+                            .iter()
+                            .map(|(id, href, media_type)| format!(
+                                r#"    <item id="{id}" href="{href}" media-type="{media_type}"/>"#
+                            ))
+                    )
                     .collect::<Vec<_>>()
                     .join("\n"),
                 chapters
@@ -2712,12 +2681,7 @@ mod tests {
             );
         }
         for (_, href, _, contents) in extra_files {
-            write_zip_file(
-                &mut writer,
-                options,
-                &format!("OEBPS/{href}"),
-                contents,
-            );
+            write_zip_file(&mut writer, options, &format!("OEBPS/{href}"), contents);
         }
         if let Some((name, contents)) = image_file {
             write_zip_bytes(&mut writer, options, name, contents);

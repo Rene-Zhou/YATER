@@ -2,15 +2,15 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
-use ratatui::Terminal;
 use yater::app::App;
 use yater::document::{
     AnnotationRef, Block, ChapterRange, Document, ImageBlock, TextBlock, TocNode,
 };
 use yater::runtime::{
-    run_terminal_event_loop, run_terminal_loop, EventSource, RuntimeError, RuntimeEvent,
+    EventSource, RuntimeError, RuntimeEvent, run_terminal_event_loop, run_terminal_loop,
 };
 
 #[test]
@@ -227,7 +227,10 @@ fn annotation_overlay_keeps_a_top_of_view_sentence_visible() {
             "└  NOTE ; | Enter | Esc────────┘"
         )
     );
-    assert_eq!(highlighted_text(terminal.backend().buffer()), "Opening [1].");
+    assert_eq!(
+        highlighted_text(terminal.backend().buffer()),
+        "Opening [1]."
+    );
 }
 
 #[test]
@@ -263,9 +266,7 @@ fn immersed_annotation_stops_scrolling_at_the_last_full_viewport() {
         KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE),
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
     ];
-    keys.extend(
-        (0..10).map(|_| KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
-    );
+    keys.extend((0..10).map(|_| KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)));
 
     run_terminal_loop(&mut terminal, &mut app, keys).expect("run terminal");
 
@@ -545,16 +546,13 @@ fn highlighted_text(buffer: &ratatui::buffer::Buffer) -> String {
     buffer
         .content()
         .iter()
-        .filter(|cell| {
-            cell.fg == Color::Rgb(169, 125, 244) && cell.bg == Color::Reset
-        })
+        .filter(|cell| cell.fg == Color::Rgb(169, 125, 244) && cell.bg == Color::Reset)
         .map(|cell| cell.symbol())
         .collect()
 }
 
 fn test_png_bytes(width: u32, height: u32) -> Vec<u8> {
-    let image =
-        ::image::RgbaImage::from_pixel(width, height, ::image::Rgba([255, 255, 255, 255]));
+    let image = ::image::RgbaImage::from_pixel(width, height, ::image::Rgba([255, 255, 255, 255]));
     let mut bytes = Cursor::new(Vec::new());
     ::image::DynamicImage::ImageRgba8(image)
         .write_to(&mut bytes, ::image::ImageFormat::Png)

@@ -104,7 +104,7 @@ mod tests {
 
     use crate::cli::ImageMode;
 
-    use super::{resolve_image_mode, select_image_mode, ImageModeSupport, SelectedImageMode};
+    use super::{ImageModeSupport, SelectedImageMode, resolve_image_mode, select_image_mode};
 
     #[test]
     fn auto_prefers_sixel_when_supported() {

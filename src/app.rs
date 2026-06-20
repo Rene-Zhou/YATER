@@ -154,8 +154,7 @@ impl App {
     }
 
     pub fn set_terminal_width(&mut self, terminal_width: u16) {
-        self.annotation_text_width =
-            usize::from(terminal_width.min(50).saturating_sub(2).max(1));
+        self.annotation_text_width = usize::from(terminal_width.min(50).saturating_sub(2).max(1));
     }
 
     pub fn set_terminal_size(&mut self, terminal_width: u16, terminal_height: u16) {
@@ -168,7 +167,9 @@ impl App {
     }
 
     pub fn is_toc_path_collapsed(&self, path: &[usize]) -> bool {
-        self.collapsed_toc_paths.iter().any(|collapsed_path| collapsed_path == path)
+        self.collapsed_toc_paths
+            .iter()
+            .any(|collapsed_path| collapsed_path == path)
     }
 
     pub fn progress(&self, timestamp: impl Into<String>) -> Progress {
@@ -346,8 +347,7 @@ impl App {
     }
 
     fn first_reading_block_in_range(&self, range: ChapterRange) -> Option<usize> {
-        (range.start_block < self.document.blocks.len()
-            && range.start_block <= range.end_block)
+        (range.start_block < self.document.blocks.len() && range.start_block <= range.end_block)
             .then_some(range.start_block)
     }
 
@@ -432,12 +432,7 @@ impl App {
         let mut rows = Vec::new();
 
         for (index, node) in self.document.toc.iter().enumerate() {
-            append_toc_rows(
-                node,
-                vec![index],
-                &self.collapsed_toc_paths,
-                &mut rows,
-            );
+            append_toc_rows(node, vec![index], &self.collapsed_toc_paths, &mut rows);
         }
 
         rows
@@ -498,11 +493,7 @@ impl App {
 
         self.current_annotation_text()
             .map(|text| {
-                annotation_display_line_count(
-                    text,
-                    self.annotation_text_width,
-                    prefix_width,
-                )
+                annotation_display_line_count(text, self.annotation_text_width, prefix_width)
             })
             .unwrap_or(0)
     }
@@ -516,7 +507,8 @@ impl App {
             .annotations
             .iter()
             .filter(|annotation_ref| {
-                sentence_range.0 <= annotation_ref.offset && annotation_ref.offset < sentence_range.1
+                sentence_range.0 <= annotation_ref.offset
+                    && annotation_ref.offset < sentence_range.1
             })
             .filter_map(|annotation_ref| self.document.annotation_text(&annotation_ref.id))
             .nth(self.selected_annotation_index)?;
@@ -539,14 +531,19 @@ impl App {
             .annotations
             .iter()
             .filter(|annotation_ref| {
-                sentence_range.0 <= annotation_ref.offset && annotation_ref.offset < sentence_range.1
+                sentence_range.0 <= annotation_ref.offset
+                    && annotation_ref.offset < sentence_range.1
             })
             .filter(|annotation_ref| self.document.annotation_text(&annotation_ref.id).is_some())
             .count()
     }
 }
 
-fn annotation_display_line_count(text: &str, width: usize, first_line_prefix_width: usize) -> usize {
+fn annotation_display_line_count(
+    text: &str,
+    width: usize,
+    first_line_prefix_width: usize,
+) -> usize {
     text.lines()
         .enumerate()
         .map(|(index, line)| {
@@ -556,8 +553,8 @@ fn annotation_display_line_count(text: &str, width: usize, first_line_prefix_wid
                 } else {
                     0
                 })
-                .max(1)
-                .div_ceil(width.max(1))
+            .max(1)
+            .div_ceil(width.max(1))
         })
         .sum::<usize>()
         .max(1)
@@ -598,9 +595,9 @@ mod tests {
     use crate::document::{
         AnnotationRef, Block, ChapterRange, Document, ImageBlock, TextBlock, TocNode,
     };
+    use crate::input::{Action, Focus};
     use crate::progress::Progress;
     use std::collections::HashMap;
-    use crate::input::{Action, Focus};
 
     use super::{App, ReadingPosition};
 

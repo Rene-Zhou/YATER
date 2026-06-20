@@ -1,19 +1,19 @@
 use std::io::IsTerminal;
 
 use clap::error::ErrorKind;
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use yater::cli::parse_from;
 use yater::epub;
-use yater::image::{resolve_image_mode, select_image_mode, ImageModeSupport};
+use yater::image::{ImageModeSupport, resolve_image_mode, select_image_mode};
 use yater::issue_log::IssueLog;
 use yater::progress::ProgressStore;
 use yater::runtime::{
-    build_app_with_image_mode, run_terminal_event_loop_with_progress, CrosstermEventSource,
-    RuntimeError,
+    CrosstermEventSource, RuntimeError, build_app_with_image_mode,
+    run_terminal_event_loop_with_progress,
 };
 use yater::terminal::{
-    should_run_interactive, with_terminal_session, CrosstermTerminalSession, TerminalError,
+    CrosstermTerminalSession, TerminalError, should_run_interactive, with_terminal_session,
 };
 
 fn main() {
@@ -65,7 +65,10 @@ fn main() {
         }
     };
 
-    if !should_run_interactive(std::io::stdin().is_terminal(), std::io::stdout().is_terminal()) {
+    if !should_run_interactive(
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    ) {
         return;
     }
 
@@ -96,7 +99,7 @@ fn main() {
                 Ok(())
             },
         )
-            .map_err(|error| TerminalError::new(error.to_string()))
+        .map_err(|error| TerminalError::new(error.to_string()))
     }) {
         report_terminal_error(&error, issue_log.as_ref(), current_timestamp);
         std::process::exit(1);

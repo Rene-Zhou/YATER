@@ -73,7 +73,7 @@ pub fn map_key(focus: Focus, key: KeyEvent) -> Action {
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-    use super::{map_key, Action, Focus};
+    use super::{Action, Focus, map_key};
 
     #[test]
     fn content_j_moves_to_next_sentence() {
@@ -117,10 +117,7 @@ mod tests {
         ];
 
         for (key_code, expected_action) in cases {
-            let action = map_key(
-                Focus::Content,
-                KeyEvent::new(key_code, KeyModifiers::NONE),
-            );
+            let action = map_key(Focus::Content, KeyEvent::new(key_code, KeyModifiers::NONE));
 
             assert_eq!(action, expected_action);
         }

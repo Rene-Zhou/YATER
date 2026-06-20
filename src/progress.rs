@@ -113,7 +113,9 @@ mod tests {
             timestamp: "2026-06-03T12:00:00Z".to_string(),
         };
 
-        store.save(book_path, progress.clone()).expect("save progress");
+        store
+            .save(book_path, progress.clone())
+            .expect("save progress");
 
         assert_eq!(
             store.load(book_path).expect("load progress"),
@@ -235,7 +237,10 @@ mod tests {
     #[test]
     fn progress_path_prefers_xdg_data_home() {
         assert_eq!(
-            super::progress_path_from_env(Some(Path::new("/xdg-data")), Some(Path::new("/home/me"))),
+            super::progress_path_from_env(
+                Some(Path::new("/xdg-data")),
+                Some(Path::new("/home/me"))
+            ),
             Some(PathBuf::from("/xdg-data/yater/progress.json"))
         );
     }

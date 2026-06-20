@@ -3,14 +3,14 @@ use std::io::Write;
 use std::path::Path;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use tempfile::tempdir;
 use yater::app::App;
 use yater::epub;
 use yater::runtime::run_terminal_loop;
-use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 #[test]
 fn epub_annotation_marker_opens_its_note_in_the_runtime_overlay() {
@@ -99,13 +99,7 @@ fn write_backlinked_epub(path: &Path) {
     );
 }
 
-fn write_epub(
-    path: &Path,
-    package_version: &str,
-    spine: &str,
-    chapter: &str,
-    notes: &str,
-) {
+fn write_epub(path: &Path, package_version: &str, spine: &str, chapter: &str, notes: &str) {
     let file = File::create(path).expect("create EPUB");
     let mut writer = ZipWriter::new(file);
     let options = SimpleFileOptions::default();
@@ -153,18 +147,8 @@ fn write_epub(
   </body>
 </html>"#,
     );
-    write_zip_file(
-        &mut writer,
-        options,
-        "OEBPS/chapter.xhtml",
-        chapter,
-    );
-    write_zip_file(
-        &mut writer,
-        options,
-        "OEBPS/notes.xhtml",
-        notes,
-    );
+    write_zip_file(&mut writer, options, "OEBPS/chapter.xhtml", chapter);
+    write_zip_file(&mut writer, options, "OEBPS/notes.xhtml", notes);
 
     writer.finish().expect("finish EPUB");
 }

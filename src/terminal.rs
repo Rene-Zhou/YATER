@@ -28,19 +28,15 @@ impl TerminalSessionBackend for CrosstermTerminalSession {
     fn enter(&mut self) -> Result<(), TerminalError> {
         crossterm::terminal::enable_raw_mode()
             .map_err(|error| TerminalError::new(error.to_string()))?;
-        crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::EnterAlternateScreen
-        )
-        .map_err(|error| TerminalError::new(error.to_string()))
+        crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)
+            .map_err(|error| TerminalError::new(error.to_string()))
     }
 
     fn exit(&mut self) -> Result<(), TerminalError> {
         let mut stdout = std::io::stdout();
         let leave_result = write_exit_commands(&mut stdout);
-        let raw_mode_result =
-            crossterm::terminal::disable_raw_mode()
-                .map_err(|error| TerminalError::new(error.to_string()));
+        let raw_mode_result = crossterm::terminal::disable_raw_mode()
+            .map_err(|error| TerminalError::new(error.to_string()));
 
         leave_result.and(raw_mode_result)
     }
@@ -59,10 +55,7 @@ pub fn should_run_interactive(stdin_is_terminal: bool, stdout_is_terminal: bool)
     stdin_is_terminal && stdout_is_terminal
 }
 
-pub fn with_terminal_session<B, F, T>(
-    backend: &mut B,
-    run: F,
-) -> Result<T, TerminalError>
+pub fn with_terminal_session<B, F, T>(backend: &mut B, run: F) -> Result<T, TerminalError>
 where
     B: TerminalSessionBackend,
     F: FnOnce() -> Result<T, TerminalError>,
@@ -100,7 +93,7 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{with_terminal_session, TerminalError, TerminalSessionBackend};
+    use super::{TerminalError, TerminalSessionBackend, with_terminal_session};
 
     #[derive(Default)]
     struct RecordingBackend {
