@@ -241,6 +241,8 @@ fn is_coalescible_navigation_key(key: crossterm::event::KeyEvent) -> bool {
         key.code,
         KeyCode::Char('j')
             | KeyCode::Char('k')
+            | KeyCode::Char('h')
+            | KeyCode::Char('l')
             | KeyCode::Char('u')
             | KeyCode::Char('n')
             | KeyCode::Up
@@ -936,6 +938,27 @@ mod tests {
         ]);
 
         assert_eq!(events, vec![key_event('j'), key_event('q')]);
+    }
+
+    #[test]
+    fn coalesces_ready_paragraph_navigation_key_backlog() {
+        let events = super::coalesce_ready_terminal_events(vec![
+            key_event('l'),
+            key_event('l'),
+            Event::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('l'),
+                KeyModifiers::NONE,
+                KeyEventKind::Repeat,
+            )),
+            Event::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('l'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+            key_event('q'),
+        ]);
+
+        assert_eq!(events, vec![key_event('l'), key_event('q')]);
     }
 
     #[test]
