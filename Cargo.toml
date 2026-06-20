@@ -2,6 +2,14 @@
 name = "yater"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+authors = ["Rene Zhou"]
+description = "A terminal-native EPUB reader with CJK-friendly sentence navigation, inline images, TOC navigation, and footnote overlays."
+license = "MIT"
+repository = "https://github.com/Rene-Zhou/YATER"
+readme = "README.md"
+keywords = ["epub", "terminal", "tui", "reader", "cjk"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
