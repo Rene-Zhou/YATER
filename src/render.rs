@@ -422,10 +422,10 @@ fn push_text_span_lines(lines: &mut Vec<Vec<Span<'static>>>, text: String, style
     let mut parts = text.split('\n').peekable();
 
     while let Some(part) = parts.next() {
-        if !part.is_empty() {
-            if let Some(line) = lines.last_mut() {
-                line.push(Span::styled(part.to_string(), style));
-            }
+        if !part.is_empty()
+            && let Some(line) = lines.last_mut()
+        {
+            line.push(Span::styled(part.to_string(), style));
         }
 
         if parts.peek().is_some() {
@@ -552,7 +552,7 @@ fn toc_layout(content: Rect) -> (Rect, Option<Rect>, Option<Rect>) {
     }
 
     let sidebar_width = toc_sidebar_width(content.width);
-    let divider_width = (sidebar_width < content.width).then_some(1).unwrap_or(0);
+    let divider_width = if sidebar_width < content.width { 1 } else { 0 };
     let reading_width = content
         .width
         .saturating_sub(sidebar_width)
@@ -722,7 +722,7 @@ fn compact_annotation_height(app: &App, content: Rect) -> u16 {
     let max_height = if content.height <= 3 {
         content.height
     } else {
-        content.height.saturating_sub(1).min(8).max(3)
+        content.height.saturating_sub(1).clamp(3, 8)
     };
     let Some(annotation) = current_annotation(app) else {
         return 3.min(content.height);

@@ -190,7 +190,7 @@ fn is_dialogue_attribution(text: &str, start: usize) -> bool {
     }
 
     let first_clause = phrase
-        .split(|character| is_post_quote_continuation(character))
+        .split(is_post_quote_continuation)
         .next()
         .unwrap_or(phrase);
 

@@ -648,7 +648,6 @@ fn append_chapter_blocks(
                 chapter_index,
                 chapter_path,
                 chapter_base,
-                legacy_annotation_ids,
                 block_offset,
                 fragment_targets,
             ));
@@ -837,53 +836,60 @@ fn blocks_from_xhtml_element(
     chapter_index: usize,
     chapter_path: &str,
     chapter_base: &str,
-    legacy_annotation_ids: &HashSet<String>,
     block_offset: usize,
     fragment_targets: &mut HashMap<String, usize>,
 ) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut text = String::new();
     let mut annotation_refs = Vec::new();
-
-    append_visible_blocks(
-        node,
+    let mut context = VisibleBlockContext {
         chapter_index,
         chapter_path,
         chapter_base,
-        legacy_annotation_ids,
         block_offset,
-        &mut blocks,
-        &mut text,
-        &mut annotation_refs,
         fragment_targets,
-    );
+    };
+    let mut output = VisibleBlockOutput {
+        blocks: &mut blocks,
+        text: &mut text,
+        annotation_refs: &mut annotation_refs,
+    };
+
+    append_visible_blocks(node, &mut context, &mut output);
     flush_text_block(&mut blocks, chapter_index, &mut text, &mut annotation_refs);
 
-    if !blocks.is_empty() {
-        if let Some(id) = node.attribute("id") {
-            fragment_targets.insert(id.to_string(), block_offset);
-        }
+    if !blocks.is_empty()
+        && let Some(id) = node.attribute("id")
+    {
+        fragment_targets.insert(id.to_string(), block_offset);
     }
 
     blocks
 }
 
+struct VisibleBlockContext<'a> {
+    chapter_index: usize,
+    chapter_path: &'a str,
+    chapter_base: &'a str,
+    block_offset: usize,
+    fragment_targets: &'a mut HashMap<String, usize>,
+}
+
+struct VisibleBlockOutput<'a> {
+    blocks: &'a mut Vec<Block>,
+    text: &'a mut String,
+    annotation_refs: &'a mut Vec<AnnotationRef>,
+}
+
 fn append_visible_blocks(
     node: roxmltree::Node<'_, '_>,
-    chapter_index: usize,
-    chapter_path: &str,
-    chapter_base: &str,
-    legacy_annotation_ids: &HashSet<String>,
-    block_offset: usize,
-    blocks: &mut Vec<Block>,
-    text: &mut String,
-    annotation_refs: &mut Vec<AnnotationRef>,
-    fragment_targets: &mut HashMap<String, usize>,
+    context: &mut VisibleBlockContext<'_>,
+    output: &mut VisibleBlockOutput<'_>,
 ) {
     for child in node.children() {
         if child.is_text() {
             if let Some(child_text) = child.text() {
-                text.push_str(child_text);
+                output.text.push_str(child_text);
             }
         } else if child.is_element() {
             if is_non_visible_element(child) {
@@ -891,67 +897,68 @@ fn append_visible_blocks(
             }
 
             if child.tag_name().name() == "br" {
-                text.push(EXPLICIT_LINE_BREAK);
+                output.text.push(EXPLICIT_LINE_BREAK);
                 continue;
             }
 
             if is_text_block_element(child.tag_name().name()) {
-                flush_text_block(blocks, chapter_index, text, annotation_refs);
-                let child_block_offset = block_offset + blocks.len();
-                blocks.extend(blocks_from_xhtml_element(
+                flush_text_block(
+                    output.blocks,
+                    context.chapter_index,
+                    output.text,
+                    output.annotation_refs,
+                );
+                let child_block_offset = context.block_offset + output.blocks.len();
+                output.blocks.extend(blocks_from_xhtml_element(
                     child,
-                    chapter_index,
-                    chapter_path,
-                    chapter_base,
-                    legacy_annotation_ids,
+                    context.chapter_index,
+                    context.chapter_path,
+                    context.chapter_base,
                     child_block_offset,
-                    fragment_targets,
+                    context.fragment_targets,
                 ));
                 continue;
             }
 
             if child.tag_name().name() == "img" {
-                flush_text_block(blocks, chapter_index, text, annotation_refs);
+                flush_text_block(
+                    output.blocks,
+                    context.chapter_index,
+                    output.text,
+                    output.annotation_refs,
+                );
                 if let Some(id) = child.attribute("id") {
-                    fragment_targets.insert(id.to_string(), block_offset + blocks.len());
+                    context
+                        .fragment_targets
+                        .insert(id.to_string(), context.block_offset + output.blocks.len());
                 }
-                blocks.push(Block::Image(ImageBlock {
+                output.blocks.push(Block::Image(ImageBlock {
                     alt_text: child.attribute("alt").map(str::to_string),
                     source_path: child
                         .attribute("src")
-                        .map(|source_path| join_zip_path(chapter_base, source_path)),
+                        .map(|source_path| join_zip_path(context.chapter_base, source_path)),
                     data: None,
-                    chapter_index,
+                    chapter_index: context.chapter_index,
                 }));
                 continue;
             }
 
             if let Some(id) = child.attribute("id") {
-                fragment_targets.insert(id.to_string(), block_offset + blocks.len());
+                context
+                    .fragment_targets
+                    .insert(id.to_string(), context.block_offset + output.blocks.len());
             }
 
-            if let Some(id) = child
-                .attribute("href")
-                .and_then(|href| annotation_key_from_href(href, chapter_path, chapter_base))
-            {
-                annotation_refs.push(AnnotationRef {
+            if let Some(id) = child.attribute("href").and_then(|href| {
+                annotation_key_from_href(href, context.chapter_path, context.chapter_base)
+            }) {
+                output.annotation_refs.push(AnnotationRef {
                     id,
-                    offset: text.len(),
+                    offset: output.text.len(),
                 });
             }
 
-            append_visible_blocks(
-                child,
-                chapter_index,
-                chapter_path,
-                chapter_base,
-                legacy_annotation_ids,
-                block_offset,
-                blocks,
-                text,
-                annotation_refs,
-                fragment_targets,
-            );
+            append_visible_blocks(child, context, output);
         }
     }
 }
