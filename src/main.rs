@@ -77,7 +77,7 @@ fn main() {
         let detected_image_mode =
             resolve_image_mode(cli.image_mode, ImageModeSupport::detect_terminal);
         app.set_image_mode(detected_image_mode);
-        let mut events = CrosstermEventSource;
+        let mut events = CrosstermEventSource::new();
         let progress_store = ProgressStore::from_env();
         let book_path = cli.file.clone();
 

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::Path;
 use std::time::Duration;
 
@@ -135,21 +136,117 @@ pub trait EventSource {
     fn next_event(&mut self) -> Result<RuntimeEvent, RuntimeError>;
 }
 
-pub struct CrosstermEventSource;
+#[derive(Default)]
+pub struct CrosstermEventSource {
+    pending_events: VecDeque<crossterm::event::Event>,
+}
+
+impl CrosstermEventSource {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 
 impl EventSource for CrosstermEventSource {
     fn next_event(&mut self) -> Result<RuntimeEvent, RuntimeError> {
+        if let Some(event) = self.pending_events.pop_front() {
+            return Ok(RuntimeEvent::Terminal(event));
+        }
+
         let has_event = crossterm::event::poll(PROGRESS_SAVE_DEBOUNCE)
             .map_err(|error| RuntimeError::new(error.to_string()))?;
 
-        if has_event {
-            crossterm::event::read()
-                .map(RuntimeEvent::Terminal)
-                .map_err(|error| RuntimeError::new(error.to_string()))
+        if !has_event {
+            return Ok(RuntimeEvent::ProgressDebounceElapsed);
+        }
+
+        let first_event = crossterm::event::read()
+            .map_err(|error| RuntimeError::new(error.to_string()))?;
+        let mut ready_events = vec![first_event];
+
+        while crossterm::event::poll(Duration::ZERO)
+            .map_err(|error| RuntimeError::new(error.to_string()))?
+        {
+            ready_events.push(
+                crossterm::event::read()
+                    .map_err(|error| RuntimeError::new(error.to_string()))?,
+            );
+        }
+
+        let mut coalesced_events = coalesce_ready_terminal_events(ready_events).into_iter();
+        if let Some(event) = coalesced_events.next() {
+            self.pending_events.extend(coalesced_events);
+            Ok(RuntimeEvent::Terminal(event))
         } else {
             Ok(RuntimeEvent::ProgressDebounceElapsed)
         }
     }
+}
+
+fn coalesce_ready_terminal_events(
+    events: Vec<crossterm::event::Event>,
+) -> Vec<crossterm::event::Event> {
+    let mut coalesced = Vec::new();
+    let mut index = 0;
+
+    while index < events.len() {
+        let event = &events[index];
+        let crossterm::event::Event::Key(key) = event else {
+            coalesced.push(event.clone());
+            index += 1;
+            continue;
+        };
+
+        if !is_coalescible_navigation_key(*key) {
+            coalesced.push(event.clone());
+            index += 1;
+            continue;
+        }
+
+        if key.kind == crossterm::event::KeyEventKind::Press {
+            coalesced.push(event.clone());
+        }
+
+        index += 1;
+        while index < events.len() {
+            if !is_same_coalescible_key_event(&events[index], *key) {
+                break;
+            }
+            index += 1;
+        }
+    }
+
+    coalesced
+}
+
+fn is_same_coalescible_key_event(
+    event: &crossterm::event::Event,
+    key: crossterm::event::KeyEvent,
+) -> bool {
+    let crossterm::event::Event::Key(candidate) = event else {
+        return false;
+    };
+
+    is_coalescible_navigation_key(*candidate)
+        && candidate.code == key.code
+        && candidate.modifiers == key.modifiers
+}
+
+fn is_coalescible_navigation_key(key: crossterm::event::KeyEvent) -> bool {
+    use crossterm::event::{KeyCode, KeyEventKind};
+
+    matches!(
+        key.kind,
+        KeyEventKind::Press | KeyEventKind::Repeat | KeyEventKind::Release
+    ) && matches!(
+        key.code,
+        KeyCode::Char('j')
+            | KeyCode::Char('k')
+            | KeyCode::Char('u')
+            | KeyCode::Char('n')
+            | KeyCode::Up
+            | KeyCode::Down
+    )
 }
 
 pub fn run_terminal_event_loop<B: ratatui::backend::Backend, E: EventSource>(
@@ -396,6 +493,10 @@ mod tests {
 
     fn terminal_event(event: Event) -> RuntimeEvent {
         RuntimeEvent::Terminal(event)
+    }
+
+    fn key_event(character: char) -> Event {
+        Event::Key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE))
     }
 
     #[test]
@@ -824,6 +925,37 @@ mod tests {
             .expect("run terminal event loop");
 
         assert_eq!(app.position().sentence_offset, "First.".len());
+    }
+
+    #[test]
+    fn coalesces_ready_navigation_key_press_backlog() {
+        let events = super::coalesce_ready_terminal_events(vec![
+            key_event('j'),
+            key_event('j'),
+            key_event('j'),
+            key_event('q'),
+        ]);
+
+        assert_eq!(events, vec![key_event('j'), key_event('q')]);
+    }
+
+    #[test]
+    fn drops_repeat_and_release_navigation_events_from_ready_backlog() {
+        let events = super::coalesce_ready_terminal_events(vec![
+            Event::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('j'),
+                KeyModifiers::NONE,
+                KeyEventKind::Repeat,
+            )),
+            Event::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('j'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+            key_event('q'),
+        ]);
+
+        assert_eq!(events, vec![key_event('q')]);
     }
 
     #[test]
