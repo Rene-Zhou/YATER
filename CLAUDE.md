@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-YATER (Yet Another Terminal Epub Reader) is a terminal-native EPUB reader written in Rust using `ratatui` + `crossterm`. It provides Vim-style navigation, sentence-level highlighting, inline image rendering (Sixel/halfblock), a TOC sidebar, and floating footnote annotations.
+YATER (Yet Another Terminal Epub Reader) is a terminal-native EPUB reader written in Rust using `ratatui` + `crossterm`. It provides Vim-style navigation, typewriter-style sentence highlighting, inline image rendering (Sixel, Kitty, iTerm2, or halfblock), a TOC sidebar, and floating footnote annotations.
 
-The project is in pre-implementation planning. Docs exist; source code does not yet.
+The project has a working Rust implementation. Keep this file, `CONTEXT.md`, and `docs/PRD_v1.md` aligned when behavior changes.
 
 ## Development Method: TDD
 
@@ -20,12 +20,11 @@ Never write production code without a failing test driving it. Use the five test
 
 ## Build / Test / Run
 
-No `Cargo.toml` or build infrastructure exists yet. When implemented:
-
 ```
 cargo build
 cargo test
 cargo run -- <file.epub> [--image-mode=sixel|halfblock|off]
+cargo fmt --check
 ```
 
 Test fixture: `test-fixtures/DragonLance.epub` (gitignored, must be obtained separately).
@@ -66,7 +65,7 @@ Four states: `Content`, `Toc`, `AnnotationOverlay`, `AnnotationImmersed`.
 
 ## Keymap
 
-**Content**: `j`/`k` sentence nav, `h`/`l` paragraph nav, `u`/`n` page up/down, `i`/`m` chapter start/end, `;` annotation, `Tab` TOC, `q` quit.
+**Content**: `j`/`k` sentence nav, `h`/`l` paragraph nav, `u`/`n` fast sentence nav, `i`/`m` chapter start/end, `;` annotation, `Tab` TOC, `q` quit.
 **TOC**: `j`/`k` move, `l`/`Enter` expand/jump, `h` collapse/parent, `Tab`/`Esc` close.
 **AnnotationOverlay**: `;` cycle, `Enter` immerse, other key close.
 **AnnotationImmersed**: `j`/`k` scroll, `Esc` exit.
@@ -74,10 +73,11 @@ Four states: `Content`, `Toc`, `AnnotationOverlay`, `AnnotationImmersed`.
 ## Key Design Decisions
 
 - **Eager full-parse**: entire EPUB walked at open, no lazy loading
-- **Sentence segmentation** is rendering-time only, not persisted. CJK boundaries: `。`, `？`, `！`, `……`. English: `.`, `!`, `?`
+- **Sentence segmentation** is rendering-time only, not persisted. CJK boundaries: `。`, `？`, `！`, `……`, with special handling for quoted dialogue. English: `.`, `!`, `?`
 - **Image rendering**: auto-detect via `ratatui-image` Picker (Sixel → Kitty → iTerm2 → halfblock fallback)
 - **Progress**: `$XDG_DATA_HOME/yater/progress.json`, keyed by file path, debounced auto-save
 - **Errors**: startup → stderr + exit 1; runtime panic → catch, restore terminal, print; non-fatal → log to `$XDG_STATE_HOME/yater/yater.log` + placeholder in UI
+- **Reader UI**: one outer frame with chapter title and focus-specific footer; TOC is a left sidebar inside that frame; compact annotations are the only floating inner window.
 
 ## Testing Seams
 

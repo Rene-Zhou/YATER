@@ -8,7 +8,7 @@ Developers and terminal-dwellers want to read EPUB books without leaving the ter
 
 ## Solution
 
-YATER is a terminal-native EPUB reader built in Rust. It renders EPUB content directly in the terminal with sentence-level highlighting, inline image display (Sixel or halfblock fallback), a Vim-style TOC sidebar, and floating footnote annotations — all without opening a single GUI window. The UI is deliberately minimal: a top bar showing the current chapter name, and the rest is content.
+YATER is a terminal-native EPUB reader built in Rust. It renders EPUB content directly in the terminal with sentence-level highlighting, inline image display (Sixel, Kitty, iTerm2, or halfblock fallback), a Vim-style TOC sidebar, and floating footnote annotations — all without opening a single GUI window. The UI is deliberately minimal: one outer reader frame contains the chapter title, reading content, focus-specific shortcut footer, TOC sidebar, and annotation views.
 
 ## User Stories
 
@@ -17,7 +17,7 @@ YATER is a terminal-native EPUB reader built in Rust. It renders EPUB content di
 3. As a CJK reader, I want sentence segmentation to follow standard Chinese rules (boundaries at `。`, `？`, `！`, `……` only), so that sentences are not incorrectly split at commas or semicolons
 4. As a reader, I want to navigate sentences with `j`/`k`, so that I can read at my own pace with Vim-style keys
 5. As a reader, I want to jump between paragraphs with `h`/`l`, so that I can skip through content quickly
-6. As a reader, I want to page up/down with `u`/`n`, so that I can move through long chapters efficiently
+6. As a reader, I want faster sentence navigation with `u`/`n`, so that I can move through long chapters efficiently while preserving the typewriter-style focused sentence
 7. As a reader, I want to jump to the start/end of the current chapter with `i`/`m`, so that I can quickly re-read or skip ahead within a chapter
 8. As a reader, I want to open a TOC sidebar with `Tab`, so that I can see the book's structure and navigate to any chapter
 9. As a TOC user, I want Vim-style navigation (`j`/`k` to move, `l`/`Enter` to expand or jump, `h` to collapse), so that the TOC feels native to my workflow
@@ -33,8 +33,8 @@ YATER is a terminal-native EPUB reader built in Rust. It renders EPUB content di
 19. As a reader, I want `Esc` to close the annotation overlay and return to content, so that navigation stays simple
 20. As a reader, I want my reading position saved automatically, so that I can close and reopen the book without losing my place
 21. As a reader, I want progress restored when I open a previously-read book, so that I pick up exactly where I left off
-22. As a reader, I want the top bar to show only the current chapter name, so that the UI stays minimal and distraction-free
-23. As a reader, I want the content area to use the full terminal width, so that I get maximum reading space
+22. As a reader, I want the top border to show the application and current chapter, so that I retain context without a heavy UI
+23. As a reader, I want the reading area to use the available terminal width while keeping mode-specific controls in the frame footer, so that I get maximum reading space without losing key hints
 24. As a user, I want startup errors (file not found, corrupted EPUB) shown clearly on stderr, so that I know what went wrong
 25. As a user, I want runtime errors handled gracefully (terminal restored, error logged), so that a crash never leaves my terminal in a broken state
 26. As a user, I want non-fatal issues (bad image, malformed HTML) logged to a file and shown as placeholders, so that reading continues uninterrupted
@@ -75,7 +75,7 @@ Walk the DOM depth-first. Each block-level element (`<p>`, `<h1>`–`<h6>`, `<di
 
 ### Sentence segmentation
 
-A rendering-time function, not a persisted data structure. Follows standard Chinese definition of 句子: boundaries only at `。`, `？`, `！`, and `……`. For English: `.`, `!`, `?`. Returns byte-offset ranges into the original text.
+A rendering-time function, not a persisted data structure. Follows standard Chinese definition of 句子: boundaries only at `。`, `？`, `！`, and `……`; quoted Chinese dialogue keeps inner terminal punctuation together until the closing quote and may include a following attribution phrase. For English: `.`, `!`, `?`. Returns byte-offset ranges into the original text.
 
 ### Focus state machine
 
@@ -94,8 +94,8 @@ Four states: `Content`, `Toc`, `AnnotationOverlay`, `AnnotationImmersed`. Transi
 | `k` / `↑` | Previous sentence |
 | `l` | Next paragraph (next Block) |
 | `h` | Previous paragraph (previous Block) |
-| `u` | Page up |
-| `n` | Page down |
+| `u` | Fast previous sentence |
+| `n` | Fast next sentence |
 | `i` | Jump to first sentence of current chapter |
 | `m` | Jump to last sentence of current chapter |
 | `;` | Toggle annotation overlay |
@@ -128,17 +128,15 @@ Four states: `Content`, `Toc`, `AnnotationOverlay`, `AnnotationImmersed`. Transi
 ### Screen layout
 
 ```
-┌─────────────────────────────────────────────┐
-│              Chapter Name                   │  ← top bar (1 row)
-├─────────────────────────────────────────────┤
+┌  YATER | Chapter Name ─────────────────────┐
 │                                             │
-│  Content area: text + images                │  ← main area (flex)
-│  Current sentence highlighted               │
+│  Content area: text + images                │
+│  Current sentence kept near center          │
 │                                             │
-└─────────────────────────────────────────────┘
+└  READ j/k sentence | ... ──────────────────┘
 ```
 
-TOC sidebar (~30% width) overlays left side when open. No bottom bar, no line numbers, no progress percentage in v1.
+TOC mode splits the framed content area into a left sidebar and a right reading context pane separated by a dark divider. Annotation immersion reuses the same outer frame. Compact annotations are the only inner floating window. No line numbers or progress percentage in v1.
 
 ### Image rendering
 
@@ -150,7 +148,7 @@ Inspired by neo-tree.nvim. Each row assembled from indent guides (`│`, `└`, 
 
 ### Annotation overlay
 
-Floating window drawn on top of content area via ratatui's `Clear` + bordered `Paragraph`. Bottom edge aligns with top of current highlighted sentence. Multiple annotations cycle with `;`, counter shown as `[2/3]`. Overflow triggers `Enter` to immerse. Drawn after content to render on top.
+Floating window drawn on top of content area via ratatui's `Clear` + bordered `Paragraph`. Bottom edge sits above the current highlighted sentence. Multiple annotations cycle with `;`, counter shown as `[2/3]`. Short-to-medium notes wrap and expand up to a capped compact height; overflow triggers `Enter` to immerse. Drawn after content to render on top.
 
 ### Progress persistence
 
@@ -178,8 +176,8 @@ One required positional arg (EPUB path), one optional flag. `--help` and `--vers
 | Terminal backend | `crossterm` | Cross-platform terminal I/O, resize, keyboard |
 | Image rendering | `ratatui-image` | Terminal-native image display (Sixel/halfblock) |
 | Image decoding | `image` | Decode PNG/JPG/WebP from EPUB |
-| EPUB parsing | `epub` (or `roxmltree` + `zip`) | Extract spine, TOC, HTML, images |
-| HTML extraction | `scraper` or `html5ever` | XHTML to plain text, extract `<img>` and annotation refs |
+| EPUB parsing | `roxmltree` + `zip` | Extract spine, TOC, HTML, images |
+| HTML extraction | `roxmltree` | XHTML to plain text, extract `<img>` and annotation refs |
 | Serialization | `serde` + `serde_json` | Progress persistence |
 | CLI | `clap` | Argument parsing |
 
@@ -219,6 +217,6 @@ One required positional arg (EPUB path), one optional flag. `--help` and `--vers
 
 ## Further Notes
 
-- The project has zero code at time of writing. This PRD defines the v1 scope.
+- The project has a working Rust implementation. This PRD defines the v1 product scope and should be kept aligned with `CONTEXT.md` as behavior evolves.
 - ADR-0001 documents the flat block list decision.
 - The keymap is intentionally dense (single-key actions) for speed. No Ctrl/Alt modifiers in v1.
