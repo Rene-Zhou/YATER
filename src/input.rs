@@ -14,8 +14,8 @@ pub enum Action {
     PreviousSentence,
     NextParagraph,
     PreviousParagraph,
-    PageUp,
-    PageDown,
+    FastPreviousSentence,
+    FastNextSentence,
     JumpToChapterStart,
     JumpToChapterEnd,
     OpenAnnotationOverlay,
@@ -36,7 +36,7 @@ pub enum Action {
 }
 
 pub fn map_key(focus: Focus, key: KeyEvent) -> Action {
-    if key.kind == KeyEventKind::Release {
+    if matches!(key.kind, KeyEventKind::Release | KeyEventKind::Repeat) {
         return Action::Unhandled;
     }
 
@@ -45,8 +45,8 @@ pub fn map_key(focus: Focus, key: KeyEvent) -> Action {
         (Focus::Content, KeyCode::Char('k') | KeyCode::Up) => Action::PreviousSentence,
         (Focus::Content, KeyCode::Char('l')) => Action::NextParagraph,
         (Focus::Content, KeyCode::Char('h')) => Action::PreviousParagraph,
-        (Focus::Content, KeyCode::Char('u')) => Action::PageUp,
-        (Focus::Content, KeyCode::Char('n')) => Action::PageDown,
+        (Focus::Content, KeyCode::Char('u')) => Action::FastPreviousSentence,
+        (Focus::Content, KeyCode::Char('n')) => Action::FastNextSentence,
         (Focus::Content, KeyCode::Char('i')) => Action::JumpToChapterStart,
         (Focus::Content, KeyCode::Char('m')) => Action::JumpToChapterEnd,
         (Focus::Content, KeyCode::Char(';')) => Action::OpenAnnotationOverlay,
@@ -87,14 +87,14 @@ mod tests {
 
     #[test]
     fn key_release_does_not_trigger_an_action() {
-        let action = map_key(
-            Focus::Content,
-            KeyEvent::new_with_kind(
-                KeyCode::Char('j'),
-                KeyModifiers::NONE,
-                KeyEventKind::Release,
-            ),
-        );
+        let action = map_key(Focus::Content, key_with_kind('j', KeyEventKind::Release));
+
+        assert_eq!(action, Action::Unhandled);
+    }
+
+    #[test]
+    fn key_repeat_does_not_trigger_an_action() {
+        let action = map_key(Focus::Content, key_with_kind('j', KeyEventKind::Repeat));
 
         assert_eq!(action, Action::Unhandled);
     }
@@ -107,8 +107,8 @@ mod tests {
             (KeyCode::Up, Action::PreviousSentence),
             (KeyCode::Char('l'), Action::NextParagraph),
             (KeyCode::Char('h'), Action::PreviousParagraph),
-            (KeyCode::Char('u'), Action::PageUp),
-            (KeyCode::Char('n'), Action::PageDown),
+            (KeyCode::Char('u'), Action::FastPreviousSentence),
+            (KeyCode::Char('n'), Action::FastNextSentence),
             (KeyCode::Char('i'), Action::JumpToChapterStart),
             (KeyCode::Char('m'), Action::JumpToChapterEnd),
             (KeyCode::Char(';'), Action::OpenAnnotationOverlay),
@@ -184,5 +184,9 @@ mod tests {
 
             assert_eq!(action, expected_action);
         }
+    }
+
+    fn key_with_kind(character: char, kind: KeyEventKind) -> KeyEvent {
+        KeyEvent::new_with_kind(KeyCode::Char(character), KeyModifiers::NONE, kind)
     }
 }

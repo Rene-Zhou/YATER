@@ -10,7 +10,7 @@ use crate::progress::Progress;
 use crate::sentence::segment_sentences;
 use unicode_width::UnicodeWidthStr;
 
-const PAGE_SENTENCE_COUNT: usize = 10;
+const FAST_SENTENCE_COUNT: usize = 5;
 const DEFAULT_ANNOTATION_TEXT_WIDTH: usize = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,8 +185,8 @@ impl App {
             Action::PreviousSentence => self.previous_sentence(),
             Action::NextParagraph => self.advance_to_next_reading_block(),
             Action::PreviousParagraph => self.retreat_to_previous_reading_block(),
-            Action::PageDown => self.page_down(),
-            Action::PageUp => self.page_up(),
+            Action::FastNextSentence => self.fast_next_sentence(),
+            Action::FastPreviousSentence => self.fast_previous_sentence(),
             Action::JumpToChapterStart => self.jump_to_chapter_start(),
             Action::JumpToChapterEnd => self.jump_to_chapter_end(),
             Action::OpenToc => {
@@ -283,14 +283,14 @@ impl App {
         }
     }
 
-    fn page_down(&mut self) {
-        for _ in 0..PAGE_SENTENCE_COUNT {
+    fn fast_next_sentence(&mut self) {
+        for _ in 0..FAST_SENTENCE_COUNT {
             self.next_sentence();
         }
     }
 
-    fn page_up(&mut self) {
-        for _ in 0..PAGE_SENTENCE_COUNT {
+    fn fast_previous_sentence(&mut self) {
+        for _ in 0..FAST_SENTENCE_COUNT {
             self.previous_sentence();
         }
     }
@@ -756,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn page_navigation_moves_by_ten_sentences() {
+    fn fast_navigation_moves_by_five_sentences() {
         let mut app = App::new(Document {
             blocks: vec![text_block(
                 "One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten. Eleven. Twelve.",
@@ -766,17 +766,16 @@ mod tests {
             chapter_ranges: Vec::new(),
         });
 
-        app.apply(Action::PageDown);
+        app.apply(Action::FastNextSentence);
         assert_eq!(
             app.position(),
             ReadingPosition {
                 block_index: 0,
-                sentence_offset:
-                    "One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten.".len(),
+                sentence_offset: "One. Two. Three. Four. Five.".len(),
             }
         );
 
-        app.apply(Action::PageUp);
+        app.apply(Action::FastPreviousSentence);
         assert_eq!(
             app.position(),
             ReadingPosition {

@@ -106,7 +106,7 @@ fn shortcut_footer(focus: Focus, width: u16) -> Line<'static> {
         (Focus::Content, width) if width < 44 => "READ j/k | ; | Tab | q",
         (Focus::Content, width) if width < 54 => "READ j/k | ; note | Tab toc | q",
         (Focus::Content, _) => {
-            "READ j/k sentence | h/l paragraph | u/n page | ; notes | Tab toc | q quit"
+            "READ j/k sentence | h/l paragraph | u/n fast | ; notes | Tab toc | q quit"
         }
         (Focus::Toc, width) if width < 44 => "TOC j/k | Enter | Esc",
         (Focus::Toc, width) if width < 54 => "TOC j/k move | Enter open | Esc",

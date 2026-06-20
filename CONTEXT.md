@@ -55,7 +55,7 @@ A floating window drawn on top of the content area. Bottom edge aligns above the
 Startup errors (file not found, corrupted EPUB): print to stderr, exit code 1. Runtime panics: catch at top of main loop, restore terminal, print error, exit. Non-fatal issues (bad image, malformed HTML): log to `$XDG_STATE_HOME/yater/yater.log`, show placeholder, continue.
 
 ### Keymap
-Content: `j`/`k` sentence nav, `h`/`l` paragraph nav, `u`/`n` page up/down, `i`/`m` chapter start/end, `;` annotation, `Tab` TOC, `q` quit. TOC: `j`/`k` move, `l`/`Enter` expand/jump, `h` collapse/parent, `Tab`/`Esc` close. AnnotationOverlay: `;` cycle, `Enter` immerse, other key close. AnnotationImmersed: `j`/`k` scroll, `Esc` exit.
+Content: `j`/`k` sentence nav, `h`/`l` paragraph nav, `u`/`n` fast sentence nav, `i`/`m` chapter start/end, `;` annotation, `Tab` TOC, `q` quit. TOC: `j`/`k` move, `l`/`Enter` expand/jump, `h` collapse/parent, `Tab`/`Esc` close. AnnotationOverlay: `;` cycle, `Enter` immerse, other key close. AnnotationImmersed: `j`/`k` scroll, `Esc` exit.
 
 ### ChapterRange
 Maps chapter index to `(start_block, end_block)` range in the flat block list. Computed once at parse time. Each `Block` stores its chapter index. Enables `i`/`m` chapter navigation.

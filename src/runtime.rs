@@ -94,8 +94,8 @@ fn saves_progress_after(action: Action) -> bool {
             | Action::PreviousSentence
             | Action::NextParagraph
             | Action::PreviousParagraph
-            | Action::PageDown
-            | Action::PageUp
+            | Action::FastNextSentence
+            | Action::FastPreviousSentence
             | Action::JumpToChapterStart
             | Action::JumpToChapterEnd
             | Action::ExpandOrJumpToc
@@ -292,7 +292,7 @@ mod tests {
     use std::io;
     use std::path::Path;
 
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
     use ratatui::buffer::Cell;
     use ratatui::layout::{Position, Size};
@@ -762,6 +762,56 @@ mod tests {
                 terminal_event(Event::Key(KeyEvent::new(
                     KeyCode::Char('j'),
                     KeyModifiers::NONE,
+                ))),
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('q'),
+                    KeyModifiers::NONE,
+                ))),
+            ],
+        };
+
+        super::run_terminal_event_loop(&mut terminal, &mut app, &mut events)
+            .expect("run terminal event loop");
+
+        assert_eq!(app.position().sentence_offset, "First.".len());
+    }
+
+    #[test]
+    fn terminal_event_loop_ignores_auto_repeat_key_events() {
+        let mut app = build_app(
+            Path::new("/books/book.epub"),
+            |_| {
+                Ok(Document {
+                    blocks: vec![Block::Text(TextBlock {
+                        text: "First. Second. Third. Fourth.".to_string(),
+                        chapter_index: 0,
+                        annotations: Vec::new(),
+                    })],
+                    toc: Vec::new(),
+                    annotations: HashMap::new(),
+                    chapter_ranges: Vec::new(),
+                })
+            },
+            |_| Ok(None),
+        )
+        .expect("build app");
+        let backend = TestBackend::new(40, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut events = VecEventSource {
+            events: vec![
+                terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE,
+                ))),
+                terminal_event(Event::Key(KeyEvent::new_with_kind(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE,
+                    KeyEventKind::Repeat,
+                ))),
+                terminal_event(Event::Key(KeyEvent::new_with_kind(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE,
+                    KeyEventKind::Repeat,
                 ))),
                 terminal_event(Event::Key(KeyEvent::new(
                     KeyCode::Char('q'),
