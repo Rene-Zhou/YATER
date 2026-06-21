@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use crate::document::Block;
 use crate::document::ChapterRange;
@@ -22,10 +23,15 @@ pub struct ReadingPosition {
 #[derive(Debug)]
 pub struct App {
     document: Document,
+    sentence_ranges_by_block: Vec<Vec<(usize, usize)>>,
+    chapter_ranges_by_block: Vec<Option<ChapterRange>>,
+    chapter_titles_by_block: Vec<Option<String>>,
+    render_cache: RefCell<RenderCache>,
     position: ReadingPosition,
     focus: Focus,
     selected_toc_row: usize,
     collapsed_toc_paths: HashSet<Vec<usize>>,
+    visible_toc_rows: Vec<VisibleTocRow>,
     image_mode: SelectedImageMode,
     selected_annotation_index: usize,
     annotation_scroll: usize,
@@ -35,21 +41,14 @@ pub struct App {
 
 impl App {
     pub fn new(document: Document) -> Self {
-        Self {
+        Self::with_position_and_image_mode(
             document,
-            position: ReadingPosition {
+            ReadingPosition {
                 block_index: 0,
                 sentence_offset: 0,
             },
-            focus: Focus::Content,
-            selected_toc_row: 0,
-            collapsed_toc_paths: HashSet::new(),
-            image_mode: SelectedImageMode::Halfblock,
-            selected_annotation_index: 0,
-            annotation_scroll: 0,
-            annotation_text_width: DEFAULT_ANNOTATION_TEXT_WIDTH,
-            annotation_viewport_height: 1,
-        }
+            SelectedImageMode::Halfblock,
+        )
     }
 
     pub fn with_position(document: Document, position: ReadingPosition) -> Self {
@@ -72,12 +71,31 @@ impl App {
         position: ReadingPosition,
         image_mode: SelectedImageMode,
     ) -> Self {
+        let sentence_ranges_by_block = build_sentence_ranges_by_block(&document);
+        Self::from_parts(document, sentence_ranges_by_block, position, image_mode)
+    }
+
+    fn from_parts(
+        document: Document,
+        sentence_ranges_by_block: Vec<Vec<(usize, usize)>>,
+        position: ReadingPosition,
+        image_mode: SelectedImageMode,
+    ) -> Self {
+        let chapter_ranges_by_block = build_chapter_ranges_by_block(&document);
+        let chapter_titles_by_block = build_chapter_titles_by_block(&document);
+        let collapsed_toc_paths = HashSet::new();
+        let visible_toc_rows = build_visible_toc_rows(&document.toc, &collapsed_toc_paths);
         Self {
             document,
+            sentence_ranges_by_block,
+            chapter_ranges_by_block,
+            chapter_titles_by_block,
+            render_cache: RefCell::new(RenderCache::default()),
             position,
             focus: Focus::Content,
             selected_toc_row: 0,
-            collapsed_toc_paths: HashSet::new(),
+            collapsed_toc_paths,
+            visible_toc_rows,
             image_mode,
             selected_annotation_index: 0,
             annotation_scroll: 0,
@@ -87,10 +105,12 @@ impl App {
     }
 
     pub fn with_restored_progress(document: Document, progress: Option<Progress>) -> Self {
+        let sentence_ranges_by_block = build_sentence_ranges_by_block(&document);
         let position = progress
             .filter(|progress| {
                 Self::is_valid_reading_position(
                     &document,
+                    &sentence_ranges_by_block,
                     progress.block_index,
                     progress.sentence_offset,
                 )
@@ -104,18 +124,24 @@ impl App {
                 sentence_offset: 0,
             });
 
-        Self::with_position(document, position)
+        Self::from_parts(
+            document,
+            sentence_ranges_by_block,
+            position,
+            SelectedImageMode::Halfblock,
+        )
     }
 
     fn is_valid_reading_position(
         document: &Document,
+        sentence_ranges_by_block: &[Vec<(usize, usize)>],
         block_index: usize,
         sentence_offset: usize,
     ) -> bool {
         match document.blocks.get(block_index) {
-            Some(Block::Text(block)) => segment_sentences(&block.text)
-                .into_iter()
-                .any(|range| range.0 == sentence_offset),
+            Some(Block::Text(_)) => sentence_ranges_by_block
+                .get(block_index)
+                .is_some_and(|ranges| ranges.iter().any(|range| range.0 == sentence_offset)),
             Some(Block::Image(_)) => sentence_offset == 0,
             None => false,
         }
@@ -129,12 +155,102 @@ impl App {
         &self.document
     }
 
+    pub(crate) fn sentence_ranges_for_block(&self, block_index: usize) -> &[(usize, usize)] {
+        self.sentence_ranges_by_block
+            .get(block_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub(crate) fn chapter_range_for_block(&self, block_index: usize) -> Option<ChapterRange> {
+        self.chapter_ranges_by_block
+            .get(block_index)
+            .copied()
+            .flatten()
+    }
+
+    pub(crate) fn chapter_title_for_block(&self, block_index: usize) -> Option<&str> {
+        self.chapter_titles_by_block
+            .get(block_index)
+            .and_then(Option::as_deref)
+    }
+
+    pub(crate) fn content_row_metrics(
+        &self,
+        key: ContentRowMetricKey,
+        build: impl FnOnce() -> ContentRowMetrics,
+    ) -> ContentRowMetrics {
+        if let Some(metrics) = self.render_cache.borrow().content_row_metrics.get(&key) {
+            return metrics.clone();
+        }
+
+        let metrics = build();
+        self.render_cache
+            .borrow_mut()
+            .content_row_metrics
+            .insert(key, metrics.clone());
+        metrics
+    }
+
+    pub(crate) fn halfblock_image_raster(
+        &self,
+        key: HalfblockImageRasterKey,
+        build: impl FnOnce() -> Option<HalfblockImageRaster>,
+    ) -> Option<HalfblockImageRaster> {
+        if let Some(raster) = self.render_cache.borrow().halfblock_image_rasters.get(&key) {
+            return raster.clone();
+        }
+
+        let raster = build();
+        self.render_cache
+            .borrow_mut()
+            .halfblock_image_rasters
+            .insert(key, raster.clone());
+        raster
+    }
+
+    pub(crate) fn bitmap_image_is_valid(
+        &self,
+        block_index: usize,
+        validate: impl FnOnce() -> bool,
+    ) -> bool {
+        if let Some(is_valid) = self
+            .render_cache
+            .borrow()
+            .bitmap_image_validity
+            .get(&block_index)
+        {
+            return *is_valid;
+        }
+
+        let is_valid = validate();
+        self.render_cache
+            .borrow_mut()
+            .bitmap_image_validity
+            .insert(block_index, is_valid);
+        is_valid
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_content_row_metric_count(&self) -> usize {
+        self.render_cache.borrow().content_row_metrics.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_halfblock_image_raster_count(&self) -> usize {
+        self.render_cache.borrow().halfblock_image_rasters.len()
+    }
+
     pub fn focus(&self) -> Focus {
         self.focus
     }
 
     pub fn selected_toc_row(&self) -> usize {
         self.selected_toc_row
+    }
+
+    pub(crate) fn visible_toc_rows(&self) -> &[VisibleTocRow] {
+        &self.visible_toc_rows
     }
 
     pub fn selected_annotation_index(&self) -> usize {
@@ -233,12 +349,16 @@ impl App {
     }
 
     fn next_sentence(&mut self) {
-        let Some(block) = self.document.text_block(self.position.block_index) else {
+        if self
+            .document
+            .text_block(self.position.block_index)
+            .is_none()
+        {
             self.advance_to_next_reading_block();
             return;
-        };
+        }
 
-        let ranges = segment_sentences(&block.text);
+        let ranges = self.sentence_ranges_for_block(self.position.block_index);
         let Some(current_sentence_index) = ranges
             .iter()
             .position(|range| range.0 == self.position.sentence_offset)
@@ -266,12 +386,16 @@ impl App {
     }
 
     fn previous_sentence(&mut self) {
-        let Some(block) = self.document.text_block(self.position.block_index) else {
+        if self
+            .document
+            .text_block(self.position.block_index)
+            .is_none()
+        {
             self.retreat_to_previous_reading_block();
             return;
-        };
+        }
 
-        let ranges = segment_sentences(&block.text);
+        let ranges = self.sentence_ranges_for_block(self.position.block_index);
         let current_sentence_index = ranges
             .iter()
             .position(|range| range.0 == self.position.sentence_offset)
@@ -301,7 +425,9 @@ impl App {
             return;
         };
         let sentence_offset = match &self.document.blocks[block_index] {
-            Block::Text(block) => segment_sentences(&block.text)
+            Block::Text(_) => self
+                .sentence_ranges_for_block(block_index)
+                .iter()
                 .last()
                 .map(|range| range.0)
                 .unwrap_or(0),
@@ -315,10 +441,7 @@ impl App {
     }
 
     fn jump_to_chapter_start(&mut self) {
-        let Some(range) = self
-            .document
-            .chapter_range_for_block(self.position.block_index)
-        else {
+        let Some(range) = self.chapter_range_for_block(self.position.block_index) else {
             return;
         };
 
@@ -331,10 +454,7 @@ impl App {
     }
 
     fn jump_to_chapter_end(&mut self) {
-        let Some(range) = self
-            .document
-            .chapter_range_for_block(self.position.block_index)
-        else {
+        let Some(range) = self.chapter_range_for_block(self.position.block_index) else {
             return;
         };
 
@@ -357,7 +477,9 @@ impl App {
         }
 
         let sentence_offset = match &self.document.blocks[range.end_block] {
-            Block::Text(block) => segment_sentences(&block.text)
+            Block::Text(_) => self
+                .sentence_ranges_for_block(range.end_block)
+                .iter()
                 .last()
                 .map(|sentence| sentence.0)
                 .unwrap_or(0),
@@ -368,7 +490,7 @@ impl App {
     }
 
     fn next_toc_item(&mut self) {
-        let last_row = self.visible_toc_targets().len().saturating_sub(1);
+        let last_row = self.visible_toc_rows.len().saturating_sub(1);
         self.selected_toc_row = (self.selected_toc_row + 1).min(last_row);
     }
 
@@ -377,11 +499,12 @@ impl App {
     }
 
     fn activate_selected_toc_item(&mut self) {
-        let Some(row) = self.visible_toc_rows().get(self.selected_toc_row).cloned() else {
+        let Some(row) = self.visible_toc_rows.get(self.selected_toc_row).cloned() else {
             return;
         };
 
         if row.has_children && self.collapsed_toc_paths.remove(&row.path) {
+            self.refresh_visible_toc_rows();
             return;
         }
 
@@ -393,15 +516,16 @@ impl App {
     }
 
     fn collapse_or_select_parent_toc_item(&mut self) {
-        let Some(row) = self.visible_toc_rows().get(self.selected_toc_row).cloned() else {
+        let Some(row) = self.visible_toc_rows.get(self.selected_toc_row).cloned() else {
             return;
         };
 
         if row.has_children && !self.collapsed_toc_paths.contains(&row.path) {
             self.collapsed_toc_paths.insert(row.path);
+            self.refresh_visible_toc_rows();
             self.selected_toc_row = self
                 .selected_toc_row
-                .min(self.visible_toc_rows().len().saturating_sub(1));
+                .min(self.visible_toc_rows.len().saturating_sub(1));
             return;
         }
 
@@ -413,7 +537,7 @@ impl App {
         }
 
         if let Some(parent_row) = self
-            .visible_toc_rows()
+            .visible_toc_rows
             .iter()
             .position(|visible_row| visible_row.path == parent_path)
         {
@@ -421,21 +545,9 @@ impl App {
         }
     }
 
-    fn visible_toc_targets(&self) -> Vec<usize> {
-        self.visible_toc_rows()
-            .into_iter()
-            .map(|row| row.target_block_index)
-            .collect()
-    }
-
-    fn visible_toc_rows(&self) -> Vec<VisibleTocRow> {
-        let mut rows = Vec::new();
-
-        for (index, node) in self.document.toc.iter().enumerate() {
-            append_toc_rows(node, vec![index], &self.collapsed_toc_paths, &mut rows);
-        }
-
-        rows
+    fn refresh_visible_toc_rows(&mut self) {
+        self.visible_toc_rows =
+            build_visible_toc_rows(&self.document.toc, &self.collapsed_toc_paths);
     }
 
     fn toc_row_for_current_position(&self) -> Option<usize> {
@@ -500,8 +612,10 @@ impl App {
 
     fn current_annotation_text(&self) -> Option<&str> {
         let block = self.document.text_block(self.position.block_index)?;
-        let sentence_range = segment_sentences(&block.text)
-            .into_iter()
+        let sentence_range = self
+            .sentence_ranges_for_block(self.position.block_index)
+            .iter()
+            .copied()
             .find(|range| range.0 == self.position.sentence_offset)?;
         let annotation_text = block
             .annotations
@@ -520,8 +634,10 @@ impl App {
         let Some(block) = self.document.text_block(self.position.block_index) else {
             return 0;
         };
-        let Some(sentence_range) = segment_sentences(&block.text)
-            .into_iter()
+        let Some(sentence_range) = self
+            .sentence_ranges_for_block(self.position.block_index)
+            .iter()
+            .copied()
             .find(|range| range.0 == self.position.sentence_offset)
         else {
             return 0;
@@ -537,6 +653,80 @@ impl App {
             .filter(|annotation_ref| self.document.annotation_text(&annotation_ref.id).is_some())
             .count()
     }
+}
+
+#[derive(Debug, Default)]
+struct RenderCache {
+    content_row_metrics: HashMap<ContentRowMetricKey, ContentRowMetrics>,
+    halfblock_image_rasters: HashMap<HalfblockImageRasterKey, Option<HalfblockImageRaster>>,
+    bitmap_image_validity: HashMap<usize, bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ContentRowMetricKey {
+    pub chapter_start: usize,
+    pub chapter_end: usize,
+    pub width: u16,
+    pub height: u16,
+    pub image_mode: SelectedImageMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContentRowMetrics {
+    pub block_rows: Vec<u16>,
+    pub total_rows: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct HalfblockImageRasterKey {
+    pub block_index: usize,
+    pub width: u16,
+    pub height: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HalfblockImageRaster {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+fn build_sentence_ranges_by_block(document: &Document) -> Vec<Vec<(usize, usize)>> {
+    document
+        .blocks
+        .iter()
+        .map(|block| match block {
+            Block::Text(block) => segment_sentences(&block.text),
+            Block::Image(_) => Vec::new(),
+        })
+        .collect()
+}
+
+fn build_chapter_ranges_by_block(document: &Document) -> Vec<Option<ChapterRange>> {
+    let mut ranges_by_block = vec![None; document.blocks.len()];
+
+    for range in &document.chapter_ranges {
+        let end_block = range.end_block.min(document.blocks.len().saturating_sub(1));
+        if range.start_block > end_block {
+            continue;
+        }
+
+        for slot in &mut ranges_by_block[range.start_block..=end_block] {
+            *slot = Some(*range);
+        }
+    }
+
+    ranges_by_block
+}
+
+fn build_chapter_titles_by_block(document: &Document) -> Vec<Option<String>> {
+    (0..document.blocks.len())
+        .map(|block_index| {
+            document
+                .chapter_title_for_block(block_index)
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 fn annotation_display_line_count(
@@ -560,33 +750,89 @@ fn annotation_display_line_count(
         .max(1)
 }
 
-#[derive(Clone)]
-struct VisibleTocRow {
-    path: Vec<usize>,
-    target_block_index: usize,
-    has_children: bool,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VisibleTocRow {
+    pub path: Vec<usize>,
+    pub target_block_index: usize,
+    pub has_children: bool,
+    pub label: String,
+}
+
+fn build_visible_toc_rows(
+    toc: &[TocNode],
+    collapsed_paths: &HashSet<Vec<usize>>,
+) -> Vec<VisibleTocRow> {
+    let mut rows = Vec::new();
+
+    for (index, node) in toc.iter().enumerate() {
+        append_toc_rows(
+            node,
+            vec![index],
+            collapsed_paths,
+            index + 1 == toc.len(),
+            "",
+            false,
+            &mut rows,
+        );
+    }
+
+    rows
 }
 
 fn append_toc_rows(
     node: &TocNode,
     path: Vec<usize>,
     collapsed_paths: &HashSet<Vec<usize>>,
+    is_last: bool,
+    prefix: &str,
+    show_branch: bool,
     rows: &mut Vec<VisibleTocRow>,
 ) {
+    let marker = if node.children.is_empty() {
+        ""
+    } else if collapsed_paths.contains(&path) {
+        "▸ "
+    } else {
+        "▾ "
+    };
+    let branch = if !show_branch {
+        String::new()
+    } else if is_last {
+        "└ ".to_string()
+    } else {
+        "├ ".to_string()
+    };
     rows.push(VisibleTocRow {
         path: path.clone(),
         target_block_index: node.target_block_index,
         has_children: !node.children.is_empty(),
+        label: format!("{prefix}{branch}{marker}{}", node.title),
     });
 
     if collapsed_paths.contains(&path) {
         return;
     }
 
+    let child_prefix = if !show_branch {
+        prefix.to_string()
+    } else if is_last {
+        format!("{prefix}  ")
+    } else {
+        format!("{prefix}│ ")
+    };
+
     for (index, child) in node.children.iter().enumerate() {
         let mut child_path = path.clone();
         child_path.push(index);
-        append_toc_rows(child, child_path, collapsed_paths, rows);
+        append_toc_rows(
+            child,
+            child_path,
+            collapsed_paths,
+            index + 1 == node.children.len(),
+            &child_prefix,
+            true,
+            rows,
+        );
     }
 }
 
@@ -627,6 +873,105 @@ mod tests {
                 sentence_offset: 0
             }
         );
+    }
+
+    #[test]
+    fn precomputes_sentence_ranges_for_text_blocks() {
+        let app = App::new(Document {
+            blocks: vec![
+                text_block("First. Second?"),
+                image_block(),
+                text_block("第三句。"),
+            ],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+
+        assert_eq!(
+            app.sentence_ranges_for_block(0),
+            &[
+                (0, "First.".len()),
+                ("First.".len(), "First. Second?".len())
+            ]
+        );
+        assert_eq!(app.sentence_ranges_for_block(1), &[]);
+        assert_eq!(app.sentence_ranges_for_block(2), &[(0, "第三句。".len())]);
+    }
+
+    #[test]
+    fn precomputes_chapter_lookup_indexes() {
+        let app = App::new(Document {
+            blocks: vec![
+                text_block("Chapter."),
+                text_block("Section."),
+                text_block("Next chapter."),
+            ],
+            toc: vec![
+                TocNode {
+                    title: "Chapter One".to_string(),
+                    target_block_index: 0,
+                    children: vec![TocNode {
+                        title: "Section One".to_string(),
+                        target_block_index: 1,
+                        children: Vec::new(),
+                    }],
+                },
+                TocNode {
+                    title: "Chapter Two".to_string(),
+                    target_block_index: 2,
+                    children: Vec::new(),
+                },
+            ],
+            annotations: HashMap::new(),
+            chapter_ranges: vec![
+                ChapterRange {
+                    start_block: 0,
+                    end_block: 1,
+                },
+                ChapterRange {
+                    start_block: 2,
+                    end_block: 2,
+                },
+            ],
+        });
+
+        assert_eq!(
+            app.chapter_range_for_block(1),
+            Some(ChapterRange {
+                start_block: 0,
+                end_block: 1
+            })
+        );
+        assert_eq!(app.chapter_title_for_block(1), Some("Section One"));
+        assert_eq!(app.chapter_title_for_block(2), Some("Chapter Two"));
+    }
+
+    #[test]
+    fn caches_visible_toc_rows_and_refreshes_after_collapse() {
+        let mut app = App::new(Document {
+            blocks: vec![text_block("Chapter."), text_block("Section.")],
+            toc: vec![TocNode {
+                title: "Chapter One".to_string(),
+                target_block_index: 0,
+                children: vec![TocNode {
+                    title: "Section One".to_string(),
+                    target_block_index: 1,
+                    children: Vec::new(),
+                }],
+            }],
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+
+        assert_eq!(app.visible_toc_rows().len(), 2);
+        assert_eq!(app.visible_toc_rows()[1].label, "└ Section One");
+
+        app.apply(Action::OpenToc);
+        app.apply(Action::CollapseOrParentToc);
+
+        assert_eq!(app.visible_toc_rows().len(), 1);
+        assert_eq!(app.visible_toc_rows()[0].label, "▸ Chapter One");
     }
 
     #[test]

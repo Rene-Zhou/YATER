@@ -41,8 +41,10 @@ impl ProgressStore {
             fs::create_dir_all(parent)?;
         }
 
-        let contents = serde_json::to_string_pretty(&progress_by_book).map_err(io::Error::other)?;
-        fs::write(&self.path, contents)
+        let contents = serde_json::to_string(&progress_by_book).map_err(io::Error::other)?;
+        let temporary_path = self.temporary_save_path();
+        fs::write(&temporary_path, contents)?;
+        fs::rename(temporary_path, &self.path)
     }
 
     pub fn load(&self, book_path: &Path) -> io::Result<Option<Progress>> {
@@ -67,6 +69,15 @@ impl ProgressStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
             Err(error) => Err(error),
         }
+    }
+
+    fn temporary_save_path(&self) -> PathBuf {
+        let file_name = self
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_else(|| "progress.json".into());
+        self.path.with_file_name(format!("{file_name}.tmp"))
     }
 }
 
@@ -231,6 +242,33 @@ mod tests {
         assert_eq!(
             store.load(book_path).expect("load replacement progress"),
             Some(progress)
+        );
+    }
+
+    #[test]
+    fn saving_writes_compact_json_without_temp_file_residue() {
+        let tempdir = tempdir().expect("temp dir");
+        let progress_path = tempdir.path().join("progress.json");
+        let store = ProgressStore::new(progress_path.clone());
+        let book_path = Path::new("/books/example.epub");
+
+        store
+            .save(
+                book_path,
+                Progress {
+                    block_index: 7,
+                    sentence_offset: 11,
+                    timestamp: "2026-06-06T12:00:00Z".to_string(),
+                },
+            )
+            .expect("save progress");
+
+        let contents = std::fs::read_to_string(&progress_path).expect("read progress");
+        assert!(!contents.contains('\n'));
+        assert!(
+            std::fs::read_dir(tempdir.path())
+                .expect("read temp dir")
+                .all(|entry| entry.expect("entry").path() == progress_path)
         );
     }
 

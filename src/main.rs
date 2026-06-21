@@ -41,11 +41,15 @@ fn main() {
         &cli.file,
         image_mode,
         |path| {
-            epub::open_with_issue_logger(path, |issue| {
-                if let Some(log) = &issue_log {
-                    let _ = log.append(current_timestamp(), issue);
-                }
-            })
+            epub::open_with_issue_logger_and_image_loading(
+                path,
+                image_mode != yater::image::SelectedImageMode::Off,
+                |issue| {
+                    if let Some(log) = &issue_log {
+                        let _ = log.append(current_timestamp(), issue);
+                    }
+                },
+            )
             .map_err(|error| RuntimeError::new(error.to_string()))
         },
         |path| {

@@ -53,7 +53,7 @@ impl ImageModeSupport {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SelectedImageMode {
     Kitty,
     Iterm2,

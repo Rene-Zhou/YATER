@@ -1,9 +1,9 @@
-use crate::app::App;
-use crate::document::{Block, TocNode};
+use crate::app::{
+    App, ContentRowMetricKey, ContentRowMetrics, HalfblockImageRaster, HalfblockImageRasterKey,
+};
+use crate::document::Block;
 use crate::image::SelectedImageMode;
 use crate::input::Focus;
-use crate::sentence::segment_sentences;
-
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -18,11 +18,9 @@ pub fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         return;
     }
 
-    let document = app.document();
     let position = app.position();
     let title = frame_title(
-        document
-            .chapter_title_for_block(position.block_index)
+        app.chapter_title_for_block(position.block_index)
             .unwrap_or(""),
         area.width,
     );
@@ -191,7 +189,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
     let document = app.document();
     let position = app.position();
-    let chapter_range = document
+    let chapter_range = app
         .chapter_range_for_block(position.block_index)
         .map(|range| range.start_block..=range.end_block)
         .unwrap_or(position.block_index..=position.block_index);
@@ -208,7 +206,7 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
                     && block_index == position.block_index)
                     .then_some(position.sentence_offset);
                 let mut cursor = 0;
-                for range in segment_sentences(&block.text) {
+                for range in app.sentence_ranges_for_block(block_index).iter().copied() {
                     if cursor < range.0 {
                         push_text_span_lines(
                             &mut block_lines,
@@ -237,7 +235,7 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
                 lines.extend(block_lines.into_iter().map(Line::from));
             }
             Some(Block::Image(image)) => {
-                lines.extend(image_content_lines(image, app.image_mode(), content));
+                lines.extend(image_content_lines(app, block_index, image, content));
             }
             None => {}
         }
@@ -348,12 +346,13 @@ fn is_super_or_subscript_digit(character: char) -> bool {
 }
 
 fn image_content_lines(
+    app: &App,
+    block_index: usize,
     image: &crate::document::ImageBlock,
-    image_mode: SelectedImageMode,
     content: Rect,
 ) -> Vec<Line<'static>> {
     let label = image.alt_text.as_deref().unwrap_or("untitled");
-    match image_mode {
+    match app.image_mode() {
         SelectedImageMode::Off => vec![Line::from(format!("[image disabled: {label}]"))],
         SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel
             if image.data.is_none() && image.source_path.is_some() =>
@@ -361,10 +360,9 @@ fn image_content_lines(
             vec![Line::from(format!("[image unavailable: {label}]"))]
         }
         SelectedImageMode::Kitty | SelectedImageMode::Iterm2 | SelectedImageMode::Sixel
-            if image
-                .data
-                .as_deref()
-                .is_some_and(|data| ::image::load_from_memory(data).is_err()) =>
+            if image.data.as_deref().is_some_and(|data| {
+                !app.bitmap_image_is_valid(block_index, || ::image::load_from_memory(data).is_ok())
+            }) =>
         {
             vec![Line::from(format!("[image unavailable: {label}]"))]
         }
@@ -372,8 +370,10 @@ fn image_content_lines(
             vec![Line::from(format!("[image: {label}]"))]
         }
         SelectedImageMode::Halfblock => match image.data.as_deref() {
-            Some(data) => render_halfblock_image(data, content.width, content.height)
-                .unwrap_or_else(|| vec![Line::from(format!("[image unavailable: {label}]"))]),
+            Some(data) => {
+                render_halfblock_image(app, block_index, data, content.width, content.height)
+                    .unwrap_or_else(|| vec![Line::from(format!("[image unavailable: {label}]"))])
+            }
             None if image.source_path.is_some() => {
                 vec![Line::from(format!("[image unavailable: {label}]"))]
             }
@@ -462,6 +462,8 @@ fn draw_current_image(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) 
 }
 
 fn render_halfblock_image(
+    app: &App,
+    block_index: usize,
     data: &[u8],
     terminal_width: u16,
     terminal_height: u16,
@@ -470,21 +472,34 @@ fn render_halfblock_image(
         return None;
     }
 
-    let max_width = terminal_width as u32;
-    let max_height = (terminal_height as u32).saturating_mul(2);
-    let decoded = ::image::load_from_memory(data).ok()?;
-    let image = if decoded.width() > max_width || decoded.height() > max_height {
-        decoded.resize(
-            max_width,
-            max_height,
-            ::image::imageops::FilterType::Nearest,
-        )
-    } else {
-        decoded
-    }
-    .to_rgba8();
-    let width = image.width();
-    let height = image.height();
+    let key = HalfblockImageRasterKey {
+        block_index,
+        width: terminal_width,
+        height: terminal_height,
+    };
+    let raster = app.halfblock_image_raster(key, || {
+        let max_width = terminal_width as u32;
+        let max_height = (terminal_height as u32).saturating_mul(2);
+        let decoded = ::image::load_from_memory(data).ok()?;
+        let image = if decoded.width() > max_width || decoded.height() > max_height {
+            decoded.resize(
+                max_width,
+                max_height,
+                ::image::imageops::FilterType::Nearest,
+            )
+        } else {
+            decoded
+        }
+        .to_rgba8();
+
+        Some(HalfblockImageRaster {
+            width: image.width(),
+            height: image.height(),
+            rgba: image.into_raw(),
+        })
+    })?;
+    let width = raster.width;
+    let height = raster.height;
     if width == 0 || height == 0 {
         return None;
     }
@@ -493,23 +508,33 @@ fn render_halfblock_image(
     for y in (0..height).step_by(2) {
         let mut spans = Vec::new();
         for x in 0..width {
-            let top = image.get_pixel(x, y);
+            let top = raster_pixel(&raster, x, y)?;
             let bottom = if y + 1 < height {
-                image.get_pixel(x, y + 1)
+                raster_pixel(&raster, x, y + 1)?
             } else {
                 top
             };
             spans.push(Span::styled(
                 "▀",
                 Style::default()
-                    .fg(rgba_to_color(top.0))
-                    .bg(rgba_to_color(bottom.0)),
+                    .fg(rgba_to_color(top))
+                    .bg(rgba_to_color(bottom)),
             ));
         }
         lines.push(Line::from(spans));
     }
 
     Some(lines)
+}
+
+fn raster_pixel(raster: &HalfblockImageRaster, x: u32, y: u32) -> Option<[u8; 4]> {
+    let offset = ((y * raster.width + x) * 4) as usize;
+    Some([
+        *raster.rgba.get(offset)?,
+        *raster.rgba.get(offset + 1)?,
+        *raster.rgba.get(offset + 2)?,
+        *raster.rgba.get(offset + 3)?,
+    ])
 }
 
 fn rgba_to_color([red, green, blue, alpha]: [u8; 4]) -> Color {
@@ -521,20 +546,19 @@ fn rgba_to_color([red, green, blue, alpha]: [u8; 4]) -> Color {
 }
 
 fn draw_toc(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) {
-    let mut rows = Vec::new();
-    let toc = app.document().toc.as_slice();
-
-    for (index, node) in toc.iter().enumerate() {
-        append_toc_rows(
-            node,
-            &[index],
-            app,
-            index + 1 == toc.len(),
-            "",
-            false,
-            &mut rows,
-        );
-    }
+    let rows = app
+        .visible_toc_rows()
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let line = Line::from(row.label.clone());
+            if index == app.selected_toc_row() {
+                line.style(focus_highlight_style())
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>();
 
     frame.render_widget(Clear, content);
     let scroll = toc_scroll_offset(app.selected_toc_row(), content.height);
@@ -605,63 +629,6 @@ fn toc_scroll_offset(selected_row: usize, visible_height: u16) -> u16 {
         0
     } else {
         (selected_row + 1 - visible_height) as u16
-    }
-}
-
-fn append_toc_rows<'a>(
-    node: &'a TocNode,
-    path: &[usize],
-    app: &App,
-    is_last: bool,
-    prefix: &str,
-    show_branch: bool,
-    rows: &mut Vec<Line<'a>>,
-) {
-    let is_collapsed = app.is_toc_path_collapsed(path);
-    let marker = if node.children.is_empty() {
-        ""
-    } else if is_collapsed {
-        "▸ "
-    } else {
-        "▾ "
-    };
-    let branch = if !show_branch {
-        String::new()
-    } else if is_last {
-        "└ ".to_string()
-    } else {
-        "├ ".to_string()
-    };
-    let mut row = Line::from(format!("{prefix}{branch}{marker}{}", node.title));
-    if rows.len() == app.selected_toc_row() {
-        row = row.style(focus_highlight_style());
-    }
-    rows.push(row);
-
-    let child_prefix = if !show_branch {
-        prefix.to_string()
-    } else if is_last {
-        format!("{prefix}  ")
-    } else {
-        format!("{prefix}│ ")
-    };
-
-    if is_collapsed {
-        return;
-    }
-
-    for (index, child) in node.children.iter().enumerate() {
-        let mut child_path = path.to_vec();
-        child_path.push(index);
-        append_toc_rows(
-            child,
-            &child_path,
-            app,
-            index + 1 == node.children.len(),
-            &child_prefix,
-            true,
-            rows,
-        );
     }
 }
 
@@ -765,27 +732,28 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App
 fn current_sentence_screen_row(app: &App, content: Rect) -> Option<u16> {
     let position = app.position();
     let block = app.document().text_block(position.block_index)?;
-    let sentence_range = segment_sentences(&block.text)
-        .into_iter()
+    let sentence_range = app
+        .sentence_ranges_for_block(position.block_index)
+        .iter()
+        .copied()
         .find(|range| range.0 == position.sentence_offset)?;
     let sentence = block.text.get(sentence_range.0..sentence_range.1)?;
     let visible_sentence = sentence.trim_start_matches(char::is_whitespace);
     let visible_start = sentence_range.1 - visible_sentence.len();
     let prefix = block.text.get(..visible_start)?;
-    let chapter_start = app
-        .document()
-        .chapter_range_for_block(position.block_index)
-        .map(|range| range.start_block)
-        .unwrap_or(position.block_index);
-    let preceding_rows = app.document().blocks[chapter_start..position.block_index]
-        .iter()
-        .map(|block| match block {
-            Block::Text(block) => text_block_screen_rows(&block.text, content.width),
-            Block::Image(image) => {
-                image_content_lines(image, app.image_mode(), content).len() as u16
-            }
+    let (chapter_start, metrics) = content_row_metrics(app, content);
+    let preceding_rows = position
+        .block_index
+        .checked_sub(chapter_start)
+        .map(|relative_index| {
+            metrics
+                .block_rows
+                .iter()
+                .take(relative_index)
+                .copied()
+                .fold(0u16, u16::saturating_add)
         })
-        .fold(0u16, u16::saturating_add);
+        .unwrap_or(0);
 
     let (top_padding, _) = typewriter_padding(content.height);
     Some(
@@ -808,27 +776,51 @@ fn content_scroll_offset(app: &App, content: Rect) -> u16 {
 }
 
 fn content_screen_rows(app: &App, content: Rect) -> u16 {
-    let document = app.document();
-    let position = app.position();
-    let chapter_range = document
-        .chapter_range_for_block(position.block_index)
-        .map(|range| range.start_block..=range.end_block)
-        .unwrap_or(position.block_index..=position.block_index);
     let (top_padding, bottom_padding) = typewriter_padding(content.height);
-    let rows = chapter_range
-        .filter_map(|block_index| document.blocks.get(block_index))
-        .map(|block| match block {
-            Block::Text(block) => text_block_screen_rows(&block.text, content.width),
-            Block::Image(image) => {
-                image_content_lines(image, app.image_mode(), content).len() as u16
-            }
-        })
-        .fold(0u16, u16::saturating_add)
-        .max(1);
+    let (_, metrics) = content_row_metrics(app, content);
+    let rows = metrics.total_rows.max(1);
 
     top_padding
         .saturating_add(rows)
         .saturating_add(bottom_padding)
+}
+
+fn content_row_metrics(app: &App, content: Rect) -> (usize, ContentRowMetrics) {
+    let document = app.document();
+    let position = app.position();
+    let range = app.chapter_range_for_block(position.block_index).unwrap_or(
+        crate::document::ChapterRange {
+            start_block: position.block_index,
+            end_block: position.block_index,
+        },
+    );
+    let key = ContentRowMetricKey {
+        chapter_start: range.start_block,
+        chapter_end: range.end_block,
+        width: content.width,
+        height: content.height,
+        image_mode: app.image_mode(),
+    };
+    let metrics = app.content_row_metrics(key, || {
+        let block_rows = (range.start_block..=range.end_block)
+            .filter_map(|block_index| {
+                document.blocks.get(block_index).map(|block| match block {
+                    Block::Text(block) => text_block_screen_rows(&block.text, content.width),
+                    Block::Image(image) => {
+                        image_content_lines(app, block_index, image, content).len() as u16
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let total_rows = block_rows.iter().copied().fold(0u16, u16::saturating_add);
+
+        ContentRowMetrics {
+            block_rows,
+            total_rows,
+        }
+    });
+
+    (range.start_block, metrics)
 }
 
 fn typewriter_center_row(height: u16) -> u16 {
@@ -894,8 +886,10 @@ fn current_annotation(app: &App) -> Option<VisibleAnnotation> {
     let document = app.document();
     let position = app.position();
     let block = document.text_block(position.block_index)?;
-    let sentence_range = segment_sentences(&block.text)
-        .into_iter()
+    let sentence_range = app
+        .sentence_ranges_for_block(position.block_index)
+        .iter()
+        .copied()
         .find(|range| range.0 == position.sentence_offset)?;
     let annotation_refs = block
         .annotations
@@ -955,6 +949,28 @@ mod tests {
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("Chapter One"));
         assert!(rendered.contains("Second sentence."));
+    }
+
+    #[test]
+    fn caches_content_row_metrics_across_repeated_draws() {
+        let document = test_document();
+        let app = App::with_position(
+            document,
+            ReadingPosition {
+                block_index: 0,
+                sentence_offset: 0,
+            },
+        );
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+        assert_eq!(app.cached_content_row_metric_count(), 1);
+
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("draw again");
+        assert_eq!(app.cached_content_row_metric_count(), 1);
     }
 
     #[test]
@@ -1644,6 +1660,32 @@ mod tests {
         let rendered = buffer_text(terminal.backend().buffer());
         assert!(rendered.contains("▀▀"));
         assert!(!rendered.contains("[image: Map of routes]"));
+    }
+
+    #[test]
+    fn caches_halfblock_image_raster_across_repeated_draws() {
+        let document = Document {
+            blocks: vec![Block::Image(ImageBlock {
+                alt_text: Some("Map of routes".to_string()),
+                source_path: Some("OEBPS/images/map.png".to_string()),
+                data: Some(test_png_bytes()),
+                chapter_index: 0,
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        };
+        let app = App::with_image_mode(document, crate::image::SelectedImageMode::Halfblock);
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+        assert_eq!(app.cached_halfblock_image_raster_count(), 1);
+
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("draw again");
+        assert_eq!(app.cached_halfblock_image_raster_count(), 1);
     }
 
     #[test]

@@ -22,8 +22,20 @@ pub fn open(path: &Path) -> Result<Document, EpubError> {
     open_with_issue_logger(path, |_| {})
 }
 
+pub fn open_with_image_loading(path: &Path, load_images: bool) -> Result<Document, EpubError> {
+    open_with_issue_logger_and_image_loading(path, load_images, |_| {})
+}
+
 pub fn open_with_issue_logger(
     path: &Path,
+    mut log_issue: impl FnMut(&str),
+) -> Result<Document, EpubError> {
+    open_with_issue_logger_and_image_loading(path, true, &mut log_issue)
+}
+
+pub fn open_with_issue_logger_and_image_loading(
+    path: &Path,
+    load_images: bool,
     mut log_issue: impl FnMut(&str),
 ) -> Result<Document, EpubError> {
     let file = File::open(path).map_err(|error| EpubError(error.to_string()))?;
@@ -71,7 +83,9 @@ pub fn open_with_issue_logger(
                 malformed_chapter_placeholder(&chapter_path, chapter_index)
             }
         };
-        load_image_data(&mut archive, &mut parsed_chapter.blocks, &mut log_issue);
+        if load_images {
+            load_image_data(&mut archive, &mut parsed_chapter.blocks, &mut log_issue);
+        }
 
         target_blocks_by_href.insert(chapter_path.clone(), start_block);
         for (fragment, relative_block_index) in &parsed_chapter.fragment_targets {
@@ -1882,6 +1896,31 @@ mod tests {
         assert!(matches!(
             &document.blocks[2],
             Block::Text(block) if block.text == "after."
+        ));
+    }
+
+    #[test]
+    fn can_open_without_loading_image_bytes() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p><img src="images/picture.png" alt="Picture"/></p>
+  </body>
+</html>"#,
+        );
+
+        let document =
+            super::open_with_image_loading(&epub_path, false).expect("parse EPUB without images");
+
+        assert!(matches!(
+            &document.blocks[0],
+            Block::Image(block)
+                if block.source_path.as_deref() == Some("OEBPS/images/picture.png")
+                    && block.data.is_none()
         ));
     }
 
