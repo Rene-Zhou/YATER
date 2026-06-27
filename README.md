@@ -120,6 +120,7 @@ The project uses a test-first workflow. Useful seams include:
 
 - [CONTEXT.md](CONTEXT.md) documents the current domain model and runtime behavior.
 - [docs/PRD_v1.md](docs/PRD_v1.md) describes the v1 product scope.
+- [docs/basic-epub-formatting-plan.md](docs/basic-epub-formatting-plan.md) defines the approved requirements and development plan for basic EPUB formatting in the TUI.
 - [docs/adr/0001-flat-block-list.md](docs/adr/0001-flat-block-list.md) records the flat block list data model decision.
 
 ## Scope
