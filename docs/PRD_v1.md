@@ -41,6 +41,7 @@ YATER is a terminal-native EPUB reader built in Rust. It renders EPUB content di
 27. As a user, I want `--help` and `--version` flags, so that I can get basic info without reading docs
 28. As a reader, I want the terminal to handle resize events smoothly, so that the layout adapts when I change window size
 29. As a reader on a small terminal, I want a "Terminal too small" message, so that I know to resize before continuing
+30. As a reader, I want semantic EPUB emphasis, headings, blockquotes, and lists rendered in the TUI, so that the book's basic structure remains readable without browser-level layout
 
 ## Implementation Decisions
 
@@ -60,7 +61,9 @@ Single Rust crate with the following top-level modules:
 ### Data model
 
 - **Document**: flat `Vec<Block>` in spine order. Each Block knows its chapter index. See [ADR-0001](adr/0001-flat-block-list.md).
-- **Block**: two variants — `TextBlock(plain_text, Vec<AnnotationRef>)` and `ImageBlock(image_data)`.
+- **Block**: two variants — `TextBlock(normalized_text, Vec<TextStyleRange>, TextBlockPresentation, Vec<AnnotationRef>)` and `ImageBlock(image_data)`.
+- **TextStyleRange**: a sorted UTF-8 byte range carrying the effective bold, italic, underline, and strikethrough modifiers. See [ADR-0002](adr/0002-flat-style-ranges.md).
+- **TextBlockPresentation**: composable heading role, blockquote depth, and optional list-item marker/depth/continuation metadata.
 - **AnnotationStore**: `HashMap<String, String>` mapping annotation IDs to pre-extracted plain text.
 - **ChapterRange**: `Vec<(start_block, end_block)>` mapping chapter index to block range. Computed at parse time.
 - **TOC**: `Vec<TocNode>` tree. Each node has title, target block index, and children.
@@ -71,7 +74,7 @@ Eager full-parse at file open. Walk spine order, convert each XHTML chapter to B
 
 ### HTML-to-Block conversion
 
-Walk the DOM depth-first. Each block-level element (`<p>`, `<h1>`–`<h6>`, `<div>`, `<figure>`, `<blockquote>`) produces one or more Blocks. Inline `<img>` splits a paragraph into TextBlock + ImageBlock + TextBlock. Inline formatting (bold, italic) is stripped to plain text. Annotation links (`<a href="#id">`) are extracted as AnnotationRefs with character offsets.
+Walk the DOM depth-first. Each block-level element (`<p>`, `<h1>`–`<h6>`, `<div>`, `<figure>`, `<blockquote>`, `<li>`) produces one or more Blocks. Inline `<img>` splits a paragraph into TextBlock + ImageBlock + TextBlock. Semantic emphasis tags become flat style ranges; headings, blockquote depth, and nested ordered/unordered lists become block presentation metadata. Annotation links (`<a href="#id">`) are extracted as AnnotationRefs with byte offsets into the same normalized text. CSS is not parsed.
 
 ### Sentence segmentation
 
@@ -177,7 +180,7 @@ One required positional arg (EPUB path), one optional flag. `--help` and `--vers
 | Image rendering | `ratatui-image` | Terminal-native image display (Sixel/halfblock) |
 | Image decoding | `image` | Decode PNG/JPG/WebP from EPUB |
 | EPUB parsing | `roxmltree` + `zip` | Extract spine, TOC, HTML, images |
-| HTML extraction | `roxmltree` | XHTML to plain text, extract `<img>` and annotation refs |
+| HTML extraction | `roxmltree` | XHTML to normalized text, semantic styles, block presentation, images, and annotation refs |
 | Serialization | `serde` + `serde_json` | Progress persistence |
 | CLI | `clap` | Argument parsing |
 
@@ -193,7 +196,8 @@ One required positional arg (EPUB path), one optional flag. `--help` and `--vers
 
 ### Test fixture
 
-`test-fixtures/DragonLance.epub` — a real EPUB file used for integration tests (excluded from git via `.gitignore`).
+- `tests/fixtures/basic-formatting.epub` — a tracked synthetic EPUB covering semantic formatting.
+- `test-fixtures/DragonLance.epub` — an optional real EPUB corpus input (excluded from git via `.gitignore`).
 
 ### Testing principles
 
@@ -213,10 +217,11 @@ One required positional arg (EPUB path), one optional flag. `--help` and `--vers
 - Mouse interaction
 - Multiple open books / tabs
 - Font or font-size control
+- Full CSS cascade, author colors, or browser-equivalent EPUB layout
 - Line numbers or progress percentage display
 
 ## Further Notes
 
 - The project has a working Rust implementation. This PRD defines the v1 product scope and should be kept aligned with `CONTEXT.md` as behavior evolves.
-- ADR-0001 documents the flat block list decision.
+- ADR-0001 documents the flat block list decision; ADR-0002 documents flat style ranges and composable block presentation.
 - The keymap is intentionally dense (single-key actions) for speed. No Ctrl/Alt modifiers in v1.

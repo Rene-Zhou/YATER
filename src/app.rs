@@ -1566,6 +1566,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text [1] and [2].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![
                     AnnotationRef {
                         id: "note-1".to_string(),
@@ -1634,6 +1636,8 @@ mod tests {
         Block::Text(TextBlock {
             text: text.to_string(),
             chapter_index: 0,
+            presentation: Default::default(),
+            styles: Vec::new(),
             annotations: Vec::new(),
         })
     }
@@ -1642,6 +1646,8 @@ mod tests {
         Block::Text(TextBlock {
             text: text.to_string(),
             chapter_index: 0,
+            presentation: Default::default(),
+            styles: Vec::new(),
             annotations: vec![AnnotationRef {
                 id: id.to_string(),
                 offset,

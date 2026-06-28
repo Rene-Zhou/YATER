@@ -8,6 +8,7 @@ YATER (Yet Another Terminal Epub Reader) is a terminal-native EPUB reader writte
 - CJK-aware sentence segmentation, including quoted dialogue cases.
 - Typewriter-style reading: the active sentence stays near the vertical center.
 - Violet text-only focus highlight (`#a97df4`) without reverse video or bold.
+- Semantic EPUB formatting for bold, italic, underline, strikethrough, headings, blockquotes, and nested lists.
 - TOC sidebar opened with `Tab`, rendered inside the same reader frame.
 - Footnote/endnote extraction from EPUB semantics, DPUB-ARIA, and EPUB2-style reciprocal links.
 - Inline image support through Sixel, Kitty, iTerm2, halfblock fallback, or explicit off mode.
@@ -120,8 +121,9 @@ The project uses a test-first workflow. Useful seams include:
 
 - [CONTEXT.md](CONTEXT.md) documents the current domain model and runtime behavior.
 - [docs/PRD_v1.md](docs/PRD_v1.md) describes the v1 product scope.
-- [docs/basic-epub-formatting-plan.md](docs/basic-epub-formatting-plan.md) defines the approved requirements and development plan for basic EPUB formatting in the TUI.
+- [docs/basic-epub-formatting-plan.md](docs/basic-epub-formatting-plan.md) records the requirements and implementation plan for basic EPUB formatting in the TUI.
 - [docs/adr/0001-flat-block-list.md](docs/adr/0001-flat-block-list.md) records the flat block list data model decision.
+- [docs/adr/0002-flat-style-ranges.md](docs/adr/0002-flat-style-ranges.md) records the rich-text range and block-presentation model.
 
 ## Scope
 

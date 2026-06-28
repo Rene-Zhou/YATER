@@ -4,7 +4,9 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::document::{
-    AnnotationRef, AnnotationStore, Block, ChapterRange, Document, ImageBlock, TextBlock, TocNode,
+    AnnotationRef, AnnotationStore, Block, ChapterRange, Document, ImageBlock, ListItemMarker,
+    ListItemPresentation, TextBlock, TextBlockPresentation, TextBlockRole, TextStyle,
+    TextStyleRange, TocNode,
 };
 
 #[derive(Debug)]
@@ -231,6 +233,8 @@ fn malformed_chapter_placeholder(chapter_path: &str, chapter_index: usize) -> Pa
             text: format!("[malformed chapter: {chapter_path}]"),
             chapter_index,
             annotations: Vec::new(),
+            styles: Vec::new(),
+            presentation: TextBlockPresentation::default(),
         })],
         annotations: AnnotationStore::new(),
         fragment_targets: HashMap::new(),
@@ -856,21 +860,32 @@ fn blocks_from_xhtml_element(
     let mut blocks = Vec::new();
     let mut text = String::new();
     let mut annotation_refs = Vec::new();
+    let mut style_ranges = Vec::new();
     let mut context = VisibleBlockContext {
         chapter_index,
         chapter_path,
         chapter_base,
         block_offset,
         fragment_targets,
+        text_style: TextStyle::default(),
+        presentation: presentation_for_node(node),
     };
     let mut output = VisibleBlockOutput {
         blocks: &mut blocks,
         text: &mut text,
         annotation_refs: &mut annotation_refs,
+        style_ranges: &mut style_ranges,
     };
 
     append_visible_blocks(node, &mut context, &mut output);
-    flush_text_block(&mut blocks, chapter_index, &mut text, &mut annotation_refs);
+    flush_text_block(
+        &mut blocks,
+        chapter_index,
+        &mut text,
+        &mut annotation_refs,
+        &mut style_ranges,
+        context.presentation,
+    );
 
     if !blocks.is_empty()
         && let Some(id) = node.attribute("id")
@@ -887,12 +902,15 @@ struct VisibleBlockContext<'a> {
     chapter_base: &'a str,
     block_offset: usize,
     fragment_targets: &'a mut HashMap<String, usize>,
+    text_style: TextStyle,
+    presentation: TextBlockPresentation,
 }
 
 struct VisibleBlockOutput<'a> {
     blocks: &'a mut Vec<Block>,
     text: &'a mut String,
     annotation_refs: &'a mut Vec<AnnotationRef>,
+    style_ranges: &'a mut Vec<TextStyleRange>,
 }
 
 fn append_visible_blocks(
@@ -903,7 +921,15 @@ fn append_visible_blocks(
     for child in node.children() {
         if child.is_text() {
             if let Some(child_text) = child.text() {
+                let start = output.text.len();
                 output.text.push_str(child_text);
+                if context.text_style != TextStyle::default() && start < output.text.len() {
+                    output.style_ranges.push(TextStyleRange {
+                        start,
+                        end: output.text.len(),
+                        style: context.text_style,
+                    });
+                }
             }
         } else if child.is_element() {
             if is_non_visible_element(child) {
@@ -921,6 +947,8 @@ fn append_visible_blocks(
                     context.chapter_index,
                     output.text,
                     output.annotation_refs,
+                    output.style_ranges,
+                    context.presentation,
                 );
                 let child_block_offset = context.block_offset + output.blocks.len();
                 output.blocks.extend(blocks_from_xhtml_element(
@@ -940,6 +968,8 @@ fn append_visible_blocks(
                     context.chapter_index,
                     output.text,
                     output.annotation_refs,
+                    output.style_ranges,
+                    context.presentation,
                 );
                 if let Some(id) = child.attribute("id") {
                     context
@@ -972,9 +1002,93 @@ fn append_visible_blocks(
                 });
             }
 
+            let inherited_style = context.text_style;
+            context.text_style = style_for_element(inherited_style, child.tag_name().name());
             append_visible_blocks(child, context, output);
+            context.text_style = inherited_style;
         }
     }
+}
+
+fn style_for_element(mut style: TextStyle, element_name: &str) -> TextStyle {
+    if matches!(element_name, "strong" | "b") {
+        style.bold = true;
+    }
+    if matches!(element_name, "em" | "i") {
+        style.italic = true;
+    }
+    if matches!(element_name, "u" | "ins") {
+        style.underlined = true;
+    }
+    if matches!(element_name, "s" | "strike" | "del") {
+        style.crossed_out = true;
+    }
+    style
+}
+
+fn presentation_for_node(node: roxmltree::Node<'_, '_>) -> TextBlockPresentation {
+    let element_name = node.tag_name().name();
+    let role = element_name
+        .strip_prefix('h')
+        .and_then(|level| level.parse::<u8>().ok())
+        .filter(|level| (1..=6).contains(level))
+        .map(TextBlockRole::Heading)
+        .unwrap_or(TextBlockRole::Paragraph);
+    let quote_depth = node
+        .ancestors()
+        .filter(|ancestor| ancestor.is_element() && ancestor.tag_name().name() == "blockquote")
+        .count();
+    let list_item = list_item_presentation(node);
+    TextBlockPresentation {
+        role,
+        quote_depth,
+        list_item,
+    }
+}
+
+fn list_item_presentation(node: roxmltree::Node<'_, '_>) -> Option<ListItemPresentation> {
+    let list_item = node
+        .ancestors()
+        .find(|ancestor| ancestor.is_element() && ancestor.tag_name().name() == "li")?;
+    let list = list_item.ancestors().skip(1).find(|ancestor| {
+        ancestor.is_element() && matches!(ancestor.tag_name().name(), "ul" | "ol")
+    })?;
+    let list_depth = list_item
+        .ancestors()
+        .filter(|ancestor| {
+            ancestor.is_element() && matches!(ancestor.tag_name().name(), "ul" | "ol")
+        })
+        .count()
+        .saturating_sub(1);
+    let item_index = list
+        .children()
+        .filter(|child| child.is_element() && child.tag_name().name() == "li")
+        .position(|child| child == list_item)
+        .unwrap_or(0) as i64;
+    let marker = if list.tag_name().name() == "ol" {
+        let start = list
+            .attribute("start")
+            .and_then(|start| start.parse::<i64>().ok())
+            .unwrap_or(1);
+        ListItemMarker::Ordered(start.saturating_add(item_index))
+    } else {
+        ListItemMarker::Bullet
+    };
+    let first_item_block = list_item.descendants().skip(1).find(|candidate| {
+        candidate.is_element()
+            && is_text_block_element(candidate.tag_name().name())
+            && candidate
+                .ancestors()
+                .find(|ancestor| ancestor.is_element() && ancestor.tag_name().name() == "li")
+                == Some(list_item)
+    });
+    let continuation = node != list_item && first_item_block.is_some_and(|first| first != node);
+
+    Some(ListItemPresentation {
+        depth: list_depth,
+        marker,
+        continuation,
+    })
 }
 
 fn annotation_key_from_href(
@@ -1021,41 +1135,38 @@ fn flush_text_block(
     chapter_index: usize,
     text: &mut String,
     annotation_refs: &mut Vec<AnnotationRef>,
+    style_ranges: &mut Vec<TextStyleRange>,
+    presentation: TextBlockPresentation,
 ) {
-    let (normalized, annotations) = normalize_visible_text_and_annotations(text, annotation_refs);
+    let (normalized, annotations, styles) =
+        normalize_visible_content(text, annotation_refs, style_ranges);
 
     if !normalized.is_empty() {
         blocks.push(Block::Text(TextBlock {
             text: normalized,
             chapter_index,
             annotations,
+            styles,
+            presentation,
         }));
     }
 
     text.clear();
     annotation_refs.clear();
+    style_ranges.clear();
 }
 
-fn normalize_visible_text_and_annotations(
+fn normalize_visible_content(
     text: &str,
     annotation_refs: &[AnnotationRef],
-) -> (String, Vec<AnnotationRef>) {
+    style_ranges: &[TextStyleRange],
+) -> (String, Vec<AnnotationRef>, Vec<TextStyleRange>) {
     let mut normalized = String::new();
     let mut pending_space = false;
-    let mut normalized_annotation_refs = Vec::new();
-    let mut refs_by_offset = annotation_refs.iter().collect::<Vec<_>>();
-    refs_by_offset.sort_by_key(|annotation_ref| annotation_ref.offset);
-    let mut next_ref = 0;
+    let mut normalized_offsets = vec![None; text.len().saturating_add(1)];
 
     for (byte_index, character) in text.char_indices() {
-        while next_ref < refs_by_offset.len() && refs_by_offset[next_ref].offset <= byte_index {
-            let annotation_ref = refs_by_offset[next_ref];
-            normalized_annotation_refs.push(AnnotationRef {
-                id: annotation_ref.id.clone(),
-                offset: normalized_offset(&normalized, pending_space),
-            });
-            next_ref += 1;
-        }
+        normalized_offsets[byte_index] = Some(normalized_offset(&normalized, pending_space));
 
         if character == EXPLICIT_LINE_BREAK {
             if !normalized.is_empty() && !normalized.ends_with('\n') {
@@ -1072,17 +1183,88 @@ fn normalize_visible_text_and_annotations(
             pending_space = false;
         }
     }
+    normalized_offsets[text.len()] = Some(normalized_offset(&normalized, pending_space));
 
-    while next_ref < refs_by_offset.len() {
-        let annotation_ref = refs_by_offset[next_ref];
-        normalized_annotation_refs.push(AnnotationRef {
+    let normalized_annotation_refs = annotation_refs
+        .iter()
+        .map(|annotation_ref| AnnotationRef {
             id: annotation_ref.id.clone(),
-            offset: normalized_offset(&normalized, pending_space),
-        });
-        next_ref += 1;
-    }
+            offset: mapped_offset(&normalized_offsets, annotation_ref.offset),
+        })
+        .collect();
 
-    (normalized, normalized_annotation_refs)
+    let mut normalized_style_ranges = style_ranges
+        .iter()
+        .filter_map(|range| {
+            let start = mapped_offset(&normalized_offsets, range.start);
+            let end = mapped_offset(&normalized_offsets, range.end);
+            (start < end).then_some(TextStyleRange {
+                start,
+                end,
+                style: range.style,
+            })
+        })
+        .collect::<Vec<_>>();
+    merge_adjacent_style_ranges(&mut normalized_style_ranges);
+    normalized_style_ranges = normalized_style_ranges
+        .into_iter()
+        .filter_map(|range| {
+            trim_style_range(&normalized, range.start, range.end).map(|(start, end)| {
+                TextStyleRange {
+                    start,
+                    end,
+                    style: range.style,
+                }
+            })
+        })
+        .collect();
+    merge_adjacent_style_ranges(&mut normalized_style_ranges);
+
+    (
+        normalized,
+        normalized_annotation_refs,
+        normalized_style_ranges,
+    )
+}
+
+fn mapped_offset(offsets: &[Option<usize>], source_offset: usize) -> usize {
+    offsets
+        .get(source_offset)
+        .and_then(|offset| *offset)
+        .unwrap_or_else(|| offsets.iter().rev().find_map(|offset| *offset).unwrap_or(0))
+}
+
+fn trim_style_range(text: &str, mut start: usize, mut end: usize) -> Option<(usize, usize)> {
+    while start < end {
+        let character = text.get(start..end)?.chars().next()?;
+        if !character.is_whitespace() {
+            break;
+        }
+        start += character.len_utf8();
+    }
+    while start < end {
+        let character = text.get(start..end)?.chars().next_back()?;
+        if !character.is_whitespace() {
+            break;
+        }
+        end -= character.len_utf8();
+    }
+    (start < end).then_some((start, end))
+}
+
+fn merge_adjacent_style_ranges(ranges: &mut Vec<TextStyleRange>) {
+    let mut merged: Vec<TextStyleRange> = Vec::with_capacity(ranges.len());
+    for range in ranges.drain(..) {
+        if let Some(previous) = merged.last_mut()
+            && previous.style == range.style
+            && previous.end == range.start
+        {
+            previous.end = range.end;
+        } else {
+            merged.push(range);
+        }
+    }
+    *ranges = merged;
 }
 
 fn normalized_offset(normalized: &str, pending_space: bool) -> usize {
@@ -1130,9 +1312,344 @@ mod tests {
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
-    use crate::document::{AnnotationRef, Block, ChapterRange};
+    use crate::document::{
+        AnnotationRef, Block, ChapterRange, ListItemMarker, TextBlockRole, TextStyle,
+        TextStyleRange,
+    };
 
     use super::open;
+
+    #[test]
+    fn preserves_strong_emphasis_as_bold_style_range_after_whitespace_normalization() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p>Before <strong> bold  text </strong> after.</p>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let block = document.text_block(0).expect("first text block");
+
+        assert_eq!(block.text, "Before bold text after.");
+        assert_eq!(
+            block.styles,
+            vec![TextStyleRange {
+                start: "Before ".len(),
+                end: "Before bold text".len(),
+                style: TextStyle {
+                    bold: true,
+                    ..TextStyle::default()
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn keeps_unicode_style_ranges_on_utf8_character_boundaries() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><p>前 <strong>加粗😊</strong> 后。</p></body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let block = document.text_block(0).expect("first text block");
+        let range = block.styles.first().expect("bold range");
+
+        assert!(block.text.is_char_boundary(range.start));
+        assert!(block.text.is_char_boundary(range.end));
+        assert_eq!(&block.text[range.start..range.end], "加粗😊");
+    }
+
+    #[test]
+    fn flattens_nested_bold_and_italic_tags_into_effective_style_ranges() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p><strong>Bold <em>both</em></strong> <i>italic</i>.</p>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let block = document.text_block(0).expect("first text block");
+
+        assert_eq!(block.text, "Bold both italic.");
+        assert_eq!(
+            block.styles,
+            vec![
+                TextStyleRange {
+                    start: 0,
+                    end: "Bold".len(),
+                    style: TextStyle {
+                        bold: true,
+                        ..TextStyle::default()
+                    },
+                },
+                TextStyleRange {
+                    start: "Bold ".len(),
+                    end: "Bold both".len(),
+                    style: TextStyle {
+                        bold: true,
+                        italic: true,
+                        ..TextStyle::default()
+                    },
+                },
+                TextStyleRange {
+                    start: "Bold both ".len(),
+                    end: "Bold both italic".len(),
+                    style: TextStyle {
+                        italic: true,
+                        ..TextStyle::default()
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_underline_and_deletion_tag_aliases_as_style_ranges() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p><u>under</u> <ins>inserted</ins> <s>old</s> <strike>struck</strike> <del>deleted</del>.</p>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let block = document.text_block(0).expect("first text block");
+        let expected = [
+            (
+                "under",
+                TextStyle {
+                    underlined: true,
+                    ..TextStyle::default()
+                },
+            ),
+            (
+                "inserted",
+                TextStyle {
+                    underlined: true,
+                    ..TextStyle::default()
+                },
+            ),
+            (
+                "old",
+                TextStyle {
+                    crossed_out: true,
+                    ..TextStyle::default()
+                },
+            ),
+            (
+                "struck",
+                TextStyle {
+                    crossed_out: true,
+                    ..TextStyle::default()
+                },
+            ),
+            (
+                "deleted",
+                TextStyle {
+                    crossed_out: true,
+                    ..TextStyle::default()
+                },
+            ),
+        ];
+
+        assert_eq!(block.text, "under inserted old struck deleted.");
+        assert_eq!(block.styles.len(), expected.len());
+        for (range, (content, style)) in block.styles.iter().zip(expected) {
+            assert_eq!(&block.text[range.start..range.end], content);
+            assert_eq!(range.style, style);
+        }
+    }
+
+    #[test]
+    fn preserves_heading_levels_as_block_presentation() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <h1>Book title</h1>
+    <h3>Section title</h3>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.text_block(0).map(|block| block.presentation.role),
+            Some(TextBlockRole::Heading(1)),
+        );
+        assert_eq!(
+            document.text_block(1).map(|block| block.presentation.role),
+            Some(TextBlockRole::Heading(3)),
+        );
+    }
+
+    #[test]
+    fn preserves_nested_blockquote_depth_on_flat_text_blocks() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <blockquote>Outer quote.<blockquote><p>Nested quote.</p></blockquote></blockquote>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+
+        assert_eq!(
+            document.text_block(0).map(|block| block.text.as_str()),
+            Some("Outer quote.")
+        );
+        assert_eq!(
+            document
+                .text_block(0)
+                .map(|block| block.presentation.quote_depth),
+            Some(1)
+        );
+        assert_eq!(
+            document.text_block(1).map(|block| block.text.as_str()),
+            Some("Nested quote.")
+        );
+        assert_eq!(
+            document
+                .text_block(1)
+                .map(|block| block.presentation.quote_depth),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn preserves_nested_list_kind_depth_and_ordered_start() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <ul>
+      <li>Bullet
+        <ol start="3"><li>Third</li><li>Fourth</li></ol>
+      </li>
+    </ul>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let items = document
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Text(block) => Some((block.text.as_str(), block.presentation.list_item)),
+                Block::Image(_) => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].0, "Bullet");
+        assert_eq!(
+            items[0].1.map(|item| (item.depth, item.marker)),
+            Some((0, ListItemMarker::Bullet))
+        );
+        assert_eq!(items[1].0, "Third");
+        assert_eq!(
+            items[1].1.map(|item| (item.depth, item.marker)),
+            Some((1, ListItemMarker::Ordered(3)))
+        );
+        assert_eq!(items[2].0, "Fourth");
+        assert_eq!(
+            items[2].1.map(|item| (item.depth, item.marker)),
+            Some((1, ListItemMarker::Ordered(4)))
+        );
+    }
+
+    #[test]
+    fn marks_later_paragraphs_in_one_list_item_as_continuations() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <ol start="4"><li><p>First paragraph.</p><p>Continuation paragraph.</p></li></ol>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let first = document
+            .text_block(0)
+            .and_then(|block| block.presentation.list_item)
+            .expect("first list paragraph");
+        let continuation = document
+            .text_block(1)
+            .and_then(|block| block.presentation.list_item)
+            .expect("continued list paragraph");
+
+        assert_eq!(first.marker, ListItemMarker::Ordered(4));
+        assert!(!first.continuation);
+        assert_eq!(continuation.marker, ListItemMarker::Ordered(4));
+        assert!(continuation.continuation);
+    }
+
+    #[test]
+    fn keeps_style_and_annotation_offsets_on_the_same_normalized_text() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p><em>Text   <a href="#note-1">[1]</a></em>.</p>
+    <aside id="note-1"><p>Footnote.</p></aside>
+  </body>
+</html>"##,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let block = document.text_block(0).expect("first text block");
+        let marker_start = block.text.find("[1]").expect("marker");
+
+        assert_eq!(block.annotations[0].offset, marker_start);
+        assert_eq!(
+            &block.text[block.styles[0].start..block.styles[0].end],
+            "Text [1]"
+        );
+        assert!(block.styles[0].style.italic);
+    }
 
     #[test]
     fn parses_spine_ordered_text_blocks_toc_and_chapter_ranges() {
@@ -1294,7 +1811,7 @@ mod tests {
     }
 
     #[test]
-    fn strips_inline_formatting_and_source_whitespace_from_text_blocks() {
+    fn normalizes_source_whitespace_without_exposing_xhtml_markup() {
         let tempdir = tempdir().expect("temp dir");
         let epub_path = tempdir.path().join("book.epub");
         write_minimal_epub(
@@ -1897,6 +2414,47 @@ mod tests {
             &document.blocks[2],
             Block::Text(block) if block.text == "after."
         ));
+    }
+
+    #[test]
+    fn keeps_style_ranges_valid_across_line_breaks_and_image_splits() {
+        let tempdir = tempdir().expect("temp dir");
+        let epub_path = tempdir.path().join("book.epub");
+        write_minimal_epub(
+            &epub_path,
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <p><strong>Before<br/>After<img src="images/picture.png" alt="Picture"/>Tail</strong></p>
+  </body>
+</html>"#,
+        );
+
+        let document = open(&epub_path).expect("parse EPUB");
+        let first = document.text_block(0).expect("text before image");
+        let tail = document.text_block(2).expect("text after image");
+        let styled_text = |block: &crate::document::TextBlock| {
+            block
+                .styles
+                .iter()
+                .map(|range| block.text[range.start..range.end].to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(first.text, "Before\nAfter");
+        assert_eq!(
+            styled_text(first),
+            vec!["Before".to_string(), "After".to_string()]
+        );
+        assert_eq!(tail.text, "Tail");
+        assert_eq!(styled_text(tail), vec!["Tail".to_string()]);
+        assert!(
+            first
+                .styles
+                .iter()
+                .chain(&tail.styles)
+                .all(|range| range.style.bold)
+        );
     }
 
     #[test]

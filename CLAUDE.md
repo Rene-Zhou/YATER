@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-YATER (Yet Another Terminal Epub Reader) is a terminal-native EPUB reader written in Rust using `ratatui` + `crossterm`. It provides Vim-style navigation, typewriter-style sentence highlighting, inline image rendering (Sixel, Kitty, iTerm2, or halfblock), a TOC sidebar, and floating footnote annotations.
+YATER (Yet Another Terminal Epub Reader) is a terminal-native EPUB reader written in Rust using `ratatui` + `crossterm`. It provides Vim-style navigation, typewriter-style sentence highlighting, semantic EPUB formatting, inline image rendering (Sixel, Kitty, iTerm2, or halfblock), a TOC sidebar, and floating footnote annotations.
 
 The project has a working Rust implementation. Keep this file, `CONTEXT.md`, and `docs/PRD_v1.md` aligned when behavior changes.
 
@@ -41,7 +41,7 @@ cargo run -- <file.epub> [--image-mode=sixel|halfblock|off]
 cargo fmt --check
 ```
 
-Test fixture: `test-fixtures/DragonLance.epub` (gitignored, must be obtained separately).
+Test fixtures: `tests/fixtures/basic-formatting.epub` (tracked synthetic fixture) and `test-fixtures/DragonLance.epub` (gitignored real book, must be obtained separately).
 
 ## Architecture
 
@@ -63,7 +63,9 @@ Single Rust crate, synchronous main loop (no event bus). Modules:
 **Flat block list** (not a tree — see `docs/adr/0001-flat-block-list.md`):
 
 - `Document` = `Vec<Block>` in spine order; each Block carries a chapter index
-- `Block` = `TextBlock(plain_text, Vec<AnnotationRef>)` | `ImageBlock(image_data)`
+- `Block` = `TextBlock(normalized_text, styles, presentation, annotations)` | `ImageBlock(image_data)`
+- `TextStyleRange` = sorted UTF-8 byte range carrying effective bold/italic/underline/strikethrough modifiers
+- `TextBlockPresentation` = composable heading role, blockquote depth, and optional list marker/depth/continuation metadata
 - `AnnotationStore` = `HashMap<String, String>` (ID → plain text)
 - `ChapterRange` = `Vec<(start_block, end_block)>` computed at parse time
 - `TOC` = `Vec<TocNode>` tree (title, target block index, children)
@@ -87,6 +89,7 @@ Four states: `Content`, `Toc`, `AnnotationOverlay`, `AnnotationImmersed`.
 ## Key Design Decisions
 
 - **Eager full-parse**: entire EPUB walked at open, no lazy loading
+- **Basic EPUB formatting**: semantic XHTML tags are flattened into style ranges and block presentation metadata; CSS is intentionally not parsed
 - **Sentence segmentation** is rendering-time only, not persisted. CJK boundaries: `。`, `？`, `！`, `……`, with special handling for quoted dialogue. English: `.`, `!`, `?`
 - **Image rendering**: auto-detect via `ratatui-image` Picker (Sixel → Kitty → iTerm2 → halfblock fallback)
 - **Progress**: `$XDG_DATA_HOME/yater/progress.json`, keyed by file path, debounced auto-save

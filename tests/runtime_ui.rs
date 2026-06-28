@@ -187,6 +187,8 @@ fn annotation_overlay_keeps_a_top_of_view_sentence_visible() {
             Block::Text(TextBlock {
                 text: "Opening [1].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: "Opening ".len(),
@@ -244,6 +246,8 @@ fn immersed_annotation_stops_scrolling_at_the_last_full_viewport() {
         blocks: vec![Block::Text(TextBlock {
             text: "Opening [1].".to_string(),
             chapter_index: 0,
+            presentation: Default::default(),
+            styles: Vec::new(),
             annotations: vec![AnnotationRef {
                 id: "note-1".to_string(),
                 offset: "Opening ".len(),
@@ -292,6 +296,8 @@ fn enter_keeps_a_short_annotation_in_the_compact_overlay() {
         blocks: vec![Block::Text(TextBlock {
             text: "Opening [1].".to_string(),
             chapter_index: 0,
+            presentation: Default::default(),
+            styles: Vec::new(),
             annotations: vec![AnnotationRef {
                 id: "note-1".to_string(),
                 offset: "Opening ".len(),
@@ -340,6 +346,8 @@ fn enlarging_the_terminal_clamps_immersed_annotation_scroll() {
         blocks: vec![Block::Text(TextBlock {
             text: "Opening [1].".to_string(),
             chapter_index: 0,
+            presentation: Default::default(),
+            styles: Vec::new(),
             annotations: vec![AnnotationRef {
                 id: "note-1".to_string(),
                 offset: "Opening ".len(),
@@ -387,6 +395,8 @@ fn escape_steps_back_from_immersion_to_the_compact_overlay() {
         blocks: vec![Block::Text(TextBlock {
             text: "Opening [1].".to_string(),
             chapter_index: 0,
+            presentation: Default::default(),
+            styles: Vec::new(),
             annotations: vec![AnnotationRef {
                 id: "note-1".to_string(),
                 offset: "Opening ".len(),
@@ -435,6 +445,8 @@ fn semicolon_cycles_multiple_annotations_in_the_runtime_overlay() {
         blocks: vec![Block::Text(TextBlock {
             text: "Opening [1] and [2].".to_string(),
             chapter_index: 0,
+            presentation: Default::default(),
+            styles: Vec::new(),
             annotations: vec![
                 AnnotationRef {
                     id: "note-1".to_string(),
@@ -523,6 +535,8 @@ fn text_block(text: &str) -> Block {
     Block::Text(TextBlock {
         text: text.to_string(),
         chapter_index: 0,
+        presentation: Default::default(),
+        styles: Vec::new(),
         annotations: Vec::new(),
     })
 }

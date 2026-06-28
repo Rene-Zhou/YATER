@@ -8,11 +8,55 @@ pub struct AnnotationRef {
     pub offset: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub underlined: bool,
+    pub crossed_out: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextStyleRange {
+    pub start: usize,
+    pub end: usize,
+    pub style: TextStyle,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextBlockRole {
+    #[default]
+    Paragraph,
+    Heading(u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListItemMarker {
+    Bullet,
+    Ordered(i64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListItemPresentation {
+    pub depth: usize,
+    pub marker: ListItemMarker,
+    pub continuation: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextBlockPresentation {
+    pub role: TextBlockRole,
+    pub quote_depth: usize,
+    pub list_item: Option<ListItemPresentation>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextBlock {
     pub text: String,
     pub chapter_index: usize,
     pub annotations: Vec<AnnotationRef>,
+    pub styles: Vec<TextStyleRange>,
+    pub presentation: TextBlockPresentation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +150,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text with note[1].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: 14,
@@ -201,6 +247,8 @@ mod tests {
         Block::Text(TextBlock {
             text: text.to_string(),
             chapter_index,
+            presentation: Default::default(),
+            styles: Vec::new(),
             annotations: Vec::new(),
         })
     }

@@ -1,7 +1,7 @@
 use crate::app::{
     App, ContentRowMetricKey, ContentRowMetrics, HalfblockImageRaster, HalfblockImageRasterKey,
 };
-use crate::document::Block;
+use crate::document::{Block, ListItemMarker, TextBlockRole};
 use crate::image::SelectedImageMode;
 use crate::input::Focus;
 use ratatui::layout::Rect;
@@ -201,38 +201,51 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
     for block_index in chapter_range {
         match document.blocks.get(block_index) {
             Some(Block::Text(block)) => {
+                if matches!(block.presentation.role, TextBlockRole::Heading(_)) {
+                    lines.push(Line::default());
+                }
                 let mut block_lines = vec![Vec::new()];
+                let block_style = block_presentation_style(block);
                 let highlighted_sentence_offset = (app.focus() != Focus::Toc
                     && block_index == position.block_index)
                     .then_some(position.sentence_offset);
                 let mut cursor = 0;
                 for range in app.sentence_ranges_for_block(block_index).iter().copied() {
                     if cursor < range.0 {
-                        push_text_span_lines(
+                        push_block_text_span_lines(
                             &mut block_lines,
-                            block.text[cursor..range.0].to_string(),
-                            Style::default(),
+                            block,
+                            (cursor, range.0),
+                            block_style,
                         );
                     }
 
                     let style = if highlighted_sentence_offset == Some(range.0) {
-                        focus_highlight_style()
+                        block_style.patch(focus_highlight_style())
                     } else {
-                        Style::default()
+                        block_style
                     };
                     push_sentence_span_lines(&mut block_lines, block, range, style, document);
                     cursor = range.1;
                 }
 
                 if cursor < block.text.len() {
-                    push_text_span_lines(
+                    push_block_text_span_lines(
                         &mut block_lines,
-                        block.text[cursor..].to_string(),
-                        Style::default(),
+                        block,
+                        (cursor, block.text.len()),
+                        block_style,
                     );
                 }
 
-                lines.extend(block_lines.into_iter().map(Line::from));
+                lines.extend(decorated_text_block_lines(
+                    block,
+                    block_lines,
+                    content.width,
+                ));
+                if matches!(block.presentation.role, TextBlockRole::Heading(_)) {
+                    lines.push(Line::default());
+                }
             }
             Some(Block::Image(image)) => {
                 lines.extend(image_content_lines(app, block_index, image, content));
@@ -248,6 +261,148 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
     lines.extend((0..bottom_padding).map(|_| Line::default()));
 
     lines
+}
+
+fn block_presentation_style(block: &crate::document::TextBlock) -> Style {
+    match block.presentation.role {
+        TextBlockRole::Paragraph => Style::default(),
+        TextBlockRole::Heading(1) => {
+            Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        }
+        TextBlockRole::Heading(_) => Style::default().add_modifier(Modifier::BOLD),
+    }
+}
+
+fn decorated_text_block_lines(
+    block: &crate::document::TextBlock,
+    logical_lines: Vec<Vec<Span<'static>>>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let prefixes = text_block_prefixes(block, width);
+    if prefixes.first.is_empty() {
+        return logical_lines.into_iter().map(Line::from).collect();
+    }
+
+    let content_width = usize::from(text_block_content_width(block, width));
+    let mut first_visual_line = true;
+    let mut lines = Vec::new();
+    for logical_line in logical_lines {
+        for line in wrap_styled_line(logical_line, content_width) {
+            let mut spans = if first_visual_line {
+                prefixes.first.clone()
+            } else {
+                prefixes.continuation.clone()
+            };
+            spans.extend(line);
+            lines.push(Line::from(spans));
+            first_visual_line = false;
+        }
+    }
+    lines
+}
+
+struct TextBlockPrefixes {
+    first: Vec<Span<'static>>,
+    continuation: Vec<Span<'static>>,
+}
+
+fn text_block_prefixes(block: &crate::document::TextBlock, width: u16) -> TextBlockPrefixes {
+    let max_prefix_width = usize::from(width.saturating_sub(1));
+    let marker = block.presentation.list_item.map(|item| match item.marker {
+        ListItemMarker::Bullet => "• ".to_string(),
+        ListItemMarker::Ordered(ordinal) => format!("{ordinal}. "),
+    });
+    let marker = marker.map(|marker| truncate_to_width(&marker, max_prefix_width));
+    let marker_width = marker.as_deref().map(UnicodeWidthStr::width).unwrap_or(0);
+    let visible_quote_depth = block
+        .presentation
+        .quote_depth
+        .min(max_prefix_width.saturating_sub(marker_width) / 2);
+    let quote_width = visible_quote_depth.saturating_mul(2);
+    let desired_list_indent = block
+        .presentation
+        .list_item
+        .map(|item| item.depth.saturating_mul(2))
+        .unwrap_or(0);
+    let list_indent_width = desired_list_indent.min(
+        max_prefix_width
+            .saturating_sub(quote_width)
+            .saturating_sub(marker_width),
+    );
+
+    let mut first = (0..visible_quote_depth)
+        .map(|_| Span::styled("│ ", Style::default().fg(Color::DarkGray)))
+        .collect::<Vec<_>>();
+    let mut continuation = first.clone();
+    if let (Some(item), Some(marker)) = (block.presentation.list_item, marker) {
+        let indentation = " ".repeat(list_indent_width);
+        if !indentation.is_empty() {
+            first.push(Span::raw(indentation.clone()));
+            continuation.push(Span::raw(indentation));
+        }
+        if item.continuation {
+            first.push(Span::raw(" ".repeat(marker_width)));
+        } else {
+            first.push(Span::raw(marker));
+        }
+        continuation.push(Span::raw(" ".repeat(marker_width)));
+    }
+
+    TextBlockPrefixes {
+        first,
+        continuation,
+    }
+}
+
+fn text_block_content_width(block: &crate::document::TextBlock, width: u16) -> u16 {
+    let prefix_width = text_block_prefixes(block, width)
+        .first
+        .iter()
+        .map(|span| span.width())
+        .sum::<usize>();
+    usize::from(width)
+        .saturating_sub(prefix_width)
+        .max(1)
+        .min(u16::MAX as usize) as u16
+}
+
+fn wrap_styled_line(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
+    let width = width.max(1);
+    let mut lines = vec![Vec::new()];
+    let mut column = 0usize;
+    let mut line_full = false;
+
+    for span in spans {
+        for character in span.content.chars() {
+            let character_width = character.width().unwrap_or(0);
+            if character_width > 0
+                && (line_full || (column > 0 && column + character_width > width))
+            {
+                lines.push(Vec::new());
+                column = 0;
+            }
+
+            push_styled_character(
+                lines.last_mut().expect("wrapped line exists"),
+                character,
+                span.style,
+            );
+            column = column.saturating_add(character_width);
+            line_full = character_width > 0 && column >= width;
+        }
+    }
+
+    lines
+}
+
+fn push_styled_character(line: &mut Vec<Span<'static>>, character: char, style: Style) {
+    if let Some(last) = line.last_mut()
+        && last.style == style
+    {
+        last.content.to_mut().push(character);
+    } else {
+        line.push(Span::styled(character.to_string(), style));
+    }
 }
 
 fn push_sentence_span_lines(
@@ -274,30 +429,67 @@ fn push_sentence_span_lines(
             continue;
         }
         if cursor < annotation_ref.offset {
-            push_text_span_lines(
-                lines,
-                block.text[cursor..annotation_ref.offset].to_string(),
-                base_style,
-            );
+            push_block_text_span_lines(lines, block, (cursor, annotation_ref.offset), base_style);
         }
 
         let marker_end =
             annotation_marker_end(&block.text, annotation_ref.offset, sentence_range.1);
-        push_text_span_lines(
+        push_block_text_span_lines(
             lines,
-            block.text[annotation_ref.offset..marker_end].to_string(),
+            block,
+            (annotation_ref.offset, marker_end),
             base_style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         );
         cursor = marker_end;
     }
 
     if cursor < sentence_range.1 {
+        push_block_text_span_lines(lines, block, (cursor, sentence_range.1), base_style);
+    }
+}
+
+fn push_block_text_span_lines(
+    lines: &mut Vec<Vec<Span<'static>>>,
+    block: &crate::document::TextBlock,
+    range: (usize, usize),
+    base_style: Style,
+) {
+    let mut cursor = range.0;
+    for style_range in &block.styles {
+        let start = style_range.start.max(range.0);
+        let end = style_range.end.min(range.1);
+        if start >= end {
+            continue;
+        }
+        if cursor < start {
+            push_text_span_lines(lines, block.text[cursor..start].to_string(), base_style);
+        }
         push_text_span_lines(
             lines,
-            block.text[cursor..sentence_range.1].to_string(),
-            base_style,
+            block.text[start..end].to_string(),
+            apply_epub_text_style(base_style, style_range.style),
         );
+        cursor = end;
     }
+    if cursor < range.1 {
+        push_text_span_lines(lines, block.text[cursor..range.1].to_string(), base_style);
+    }
+}
+
+fn apply_epub_text_style(mut style: Style, text_style: crate::document::TextStyle) -> Style {
+    if text_style.bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if text_style.italic {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if text_style.underlined {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    if text_style.crossed_out {
+        style = style.add_modifier(Modifier::CROSSED_OUT);
+    }
+    style
 }
 
 fn annotation_marker_end(text: &str, start: usize, limit: usize) -> usize {
@@ -382,12 +574,12 @@ fn image_content_lines(
     }
 }
 
-fn text_block_screen_rows(text: &str, width: u16) -> u16 {
-    let width = usize::from(width.max(1));
+fn text_block_screen_rows(block: &crate::document::TextBlock, width: u16) -> u16 {
+    let width = usize::from(text_block_content_width(block, width));
     let mut rows = 1usize;
     let mut column = 0usize;
 
-    for character in text.chars() {
+    for character in block.text.chars() {
         if character == '\n' {
             rows += 1;
             column = 0;
@@ -411,8 +603,12 @@ fn text_block_screen_rows(text: &str, width: u16) -> u16 {
         }
     }
 
-    if column == 0 && rows > 1 && !text.ends_with('\n') {
+    if column == 0 && rows > 1 && !block.text.ends_with('\n') {
         rows -= 1;
+    }
+
+    if matches!(block.presentation.role, TextBlockRole::Heading(_)) {
+        rows += 2;
     }
 
     rows.min(u16::MAX as usize) as u16
@@ -759,8 +955,16 @@ fn current_sentence_screen_row(app: &App, content: Rect) -> Option<u16> {
     Some(
         top_padding
             .saturating_add(preceding_rows)
-            .saturating_add(wrapped_row_for_prefix(prefix, content.width)),
+            .saturating_add(text_block_leading_rows(block))
+            .saturating_add(wrapped_row_for_prefix(
+                prefix,
+                text_block_content_width(block, content.width),
+            )),
     )
+}
+
+fn text_block_leading_rows(block: &crate::document::TextBlock) -> u16 {
+    u16::from(matches!(block.presentation.role, TextBlockRole::Heading(_)))
 }
 
 fn content_scroll_offset(app: &App, content: Rect) -> u16 {
@@ -805,7 +1009,7 @@ fn content_row_metrics(app: &App, content: Rect) -> (usize, ContentRowMetrics) {
         let block_rows = (range.start_block..=range.end_block)
             .filter_map(|block_index| {
                 document.blocks.get(block_index).map(|block| match block {
-                    Block::Text(block) => text_block_screen_rows(&block.text, content.width),
+                    Block::Text(block) => text_block_screen_rows(block, content.width),
                     Block::Image(image) => {
                         image_content_lines(app, block_index, image, content).len() as u16
                     }
@@ -925,7 +1129,9 @@ mod tests {
 
     use crate::app::{App, ReadingPosition};
     use crate::document::{
-        AnnotationRef, Block, ChapterRange, Document, ImageBlock, TextBlock, TocNode,
+        AnnotationRef, Block, ChapterRange, Document, ImageBlock, ListItemMarker,
+        ListItemPresentation, TextBlock, TextBlockPresentation, TextBlockRole, TextStyle,
+        TextStyleRange, TocNode,
     };
     use crate::input::Action;
 
@@ -979,6 +1185,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "First sentence. Second sentence. Third sentence.".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: Vec::new(),
             })],
             toc: Vec::new(),
@@ -1018,6 +1226,8 @@ mod tests {
                     .collect(),
                 text,
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
             })],
             toc: Vec::new(),
             annotations: (0..4)
@@ -1045,12 +1255,437 @@ mod tests {
     }
 
     #[test]
+    fn composes_epub_style_focus_and_annotation_marker_styles() {
+        let text = "Text [1].".to_string();
+        let marker_start = text.find("[1]").expect("marker");
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                styles: vec![TextStyleRange {
+                    start: marker_start,
+                    end: marker_start + "[1]".len(),
+                    style: TextStyle {
+                        italic: true,
+                        ..TextStyle::default()
+                    },
+                }],
+                annotations: vec![AnnotationRef {
+                    id: "note-1".to_string(),
+                    offset: marker_start,
+                }],
+                text,
+                chapter_index: 0,
+                presentation: Default::default(),
+            })],
+            toc: Vec::new(),
+            annotations: [("note-1".to_string(), "Footnote.".to_string())]
+                .into_iter()
+                .collect(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(30, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        for modifier in [Modifier::ITALIC, Modifier::BOLD, Modifier::UNDERLINED] {
+            assert!(text_has_modifier(buffer, "[1]", modifier));
+        }
+        assert!(text_has_highlight(buffer, "[1]"));
+    }
+
+    #[test]
+    fn renders_bold_epub_text_without_styling_surrounding_text() {
+        let text = "Plain bold end.".to_string();
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                text,
+                chapter_index: 0,
+                presentation: Default::default(),
+                styles: vec![TextStyleRange {
+                    start: "Plain ".len(),
+                    end: "Plain bold".len(),
+                    style: TextStyle {
+                        bold: true,
+                        ..TextStyle::default()
+                    },
+                }],
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(30, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert!(text_has_modifier(
+            terminal.backend().buffer(),
+            "bold",
+            Modifier::BOLD,
+        ));
+        assert!(!text_has_modifier(
+            terminal.backend().buffer(),
+            "Plain",
+            Modifier::BOLD,
+        ));
+    }
+
+    #[test]
+    fn toc_focus_removes_sentence_highlight_but_keeps_epub_formatting() {
+        let text = "Bold sentence.".to_string();
+        let mut app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                styles: vec![TextStyleRange {
+                    start: 0,
+                    end: text.len(),
+                    style: TextStyle {
+                        bold: true,
+                        ..TextStyle::default()
+                    },
+                }],
+                text,
+                chapter_index: 0,
+                presentation: Default::default(),
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        app.apply(Action::OpenToc);
+        let backend = TestBackend::new(40, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        assert!(text_has_modifier(buffer, "Bold sentence.", Modifier::BOLD));
+        assert!(!text_has_highlight(buffer, "Bold sentence."));
+    }
+
+    #[test]
+    fn preserves_italic_epub_formatting_in_the_highlighted_sentence() {
+        let text = "Styled sentence.".to_string();
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                styles: vec![TextStyleRange {
+                    start: 0,
+                    end: text.len(),
+                    style: TextStyle {
+                        italic: true,
+                        ..TextStyle::default()
+                    },
+                }],
+                text,
+                chapter_index: 0,
+                presentation: Default::default(),
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(30, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert!(text_has_modifier(
+            terminal.backend().buffer(),
+            "Styled sentence.",
+            Modifier::ITALIC,
+        ));
+        assert!(text_has_highlight(
+            terminal.backend().buffer(),
+            "Styled sentence.",
+        ));
+    }
+
+    #[test]
+    fn renders_underlined_and_crossed_out_epub_text() {
+        let text = "under old.".to_string();
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                styles: vec![
+                    TextStyleRange {
+                        start: 0,
+                        end: "under".len(),
+                        style: TextStyle {
+                            underlined: true,
+                            ..TextStyle::default()
+                        },
+                    },
+                    TextStyleRange {
+                        start: "under ".len(),
+                        end: "under old".len(),
+                        style: TextStyle {
+                            crossed_out: true,
+                            ..TextStyle::default()
+                        },
+                    },
+                ],
+                text,
+                chapter_index: 0,
+                presentation: Default::default(),
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(30, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert!(text_has_modifier(
+            terminal.backend().buffer(),
+            "under",
+            Modifier::UNDERLINED,
+        ));
+        assert!(text_has_modifier(
+            terminal.backend().buffer(),
+            "old",
+            Modifier::CROSSED_OUT,
+        ));
+    }
+
+    #[test]
+    fn renders_heading_levels_with_terminal_modifiers_and_focus_highlight() {
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "Primary heading".to_string(),
+                chapter_index: 0,
+                presentation: TextBlockPresentation {
+                    role: TextBlockRole::Heading(1),
+                    ..TextBlockPresentation::default()
+                },
+                styles: Vec::new(),
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(30, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        assert!(text_has_modifier(buffer, "Primary heading", Modifier::BOLD,));
+        assert!(text_has_modifier(
+            buffer,
+            "Primary heading",
+            Modifier::UNDERLINED,
+        ));
+        assert!(text_has_highlight(buffer, "Primary heading"));
+    }
+
+    #[test]
+    fn renders_one_blank_row_before_and_after_a_heading() {
+        let plain = |text: &str| {
+            Block::Text(TextBlock {
+                text: text.to_string(),
+                chapter_index: 0,
+                presentation: TextBlockPresentation::default(),
+                styles: Vec::new(),
+                annotations: Vec::new(),
+            })
+        };
+        let app = App::new(Document {
+            blocks: vec![
+                plain("Before."),
+                Block::Text(TextBlock {
+                    text: "Heading".to_string(),
+                    chapter_index: 0,
+                    presentation: TextBlockPresentation {
+                        role: TextBlockRole::Heading(2),
+                        ..TextBlockPresentation::default()
+                    },
+                    styles: Vec::new(),
+                    annotations: Vec::new(),
+                }),
+                plain("After."),
+            ],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: vec![ChapterRange {
+                start_block: 0,
+                end_block: 2,
+            }],
+        });
+        let backend = TestBackend::new(40, 14);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let before = row_index_containing_text(buffer, "Before.").expect("before row");
+        let heading = row_index_containing_text(buffer, "Heading").expect("heading row");
+        let after = row_index_containing_text(buffer, "After.").expect("after row");
+        assert_eq!(heading - before, 2);
+        assert_eq!(after - heading, 2);
+    }
+
+    #[test]
+    fn repeats_a_dark_quote_gutter_on_every_wrapped_line() {
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "abcdefghijklmnop.".to_string(),
+                chapter_index: 0,
+                presentation: TextBlockPresentation {
+                    quote_depth: 1,
+                    ..TextBlockPresentation::default()
+                },
+                styles: Vec::new(),
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(20, 10);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let quote_rows = terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(20)
+            .filter(|row| row.get(1).is_some_and(|cell| cell.symbol() == "│"))
+            .collect::<Vec<_>>();
+        assert!(quote_rows.len() >= 2);
+        assert!(quote_rows.iter().all(|row| {
+            row[1].fg == Color::DarkGray && row.get(2).is_some_and(|cell| cell.symbol() == " ")
+        }));
+    }
+
+    #[test]
+    fn renders_nested_ordered_marker_with_hanging_indent_on_wrapped_lines() {
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "ABCDEFGHIJKLMN".to_string(),
+                chapter_index: 0,
+                presentation: TextBlockPresentation {
+                    list_item: Some(ListItemPresentation {
+                        depth: 1,
+                        marker: ListItemMarker::Ordered(3),
+                        continuation: false,
+                    }),
+                    ..TextBlockPresentation::default()
+                },
+                styles: Vec::new(),
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(20, 10);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let rows = buffer_rows(terminal.backend().buffer());
+        let first = rows
+            .iter()
+            .find(|row| row.contains("ABC"))
+            .expect("first list row");
+        let wrapped = rows
+            .iter()
+            .find(|row| row.contains('N'))
+            .expect("wrapped list row");
+        let first_content = first.chars().skip(1).collect::<String>();
+        let wrapped_content = wrapped.chars().skip(1).collect::<String>();
+        assert!(
+            first_content.starts_with("  3. A"),
+            "unexpected first row: {first_content:?}"
+        );
+        assert!(
+            wrapped_content.starts_with("     N"),
+            "unexpected wrapped row: {wrapped_content:?}"
+        );
+    }
+
+    #[test]
+    fn renders_an_unordered_list_item_with_a_bullet_marker() {
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "Bullet item.".to_string(),
+                chapter_index: 0,
+                presentation: TextBlockPresentation {
+                    list_item: Some(ListItemPresentation {
+                        depth: 0,
+                        marker: ListItemMarker::Bullet,
+                        continuation: false,
+                    }),
+                    ..TextBlockPresentation::default()
+                },
+                styles: Vec::new(),
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(24, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert!(buffer_text(terminal.backend().buffer()).contains("• Bullet item."));
+    }
+
+    #[test]
+    fn indents_a_list_item_continuation_without_repeating_its_marker() {
+        let app = App::new(Document {
+            blocks: vec![Block::Text(TextBlock {
+                text: "Continuation.".to_string(),
+                chapter_index: 0,
+                presentation: TextBlockPresentation {
+                    list_item: Some(ListItemPresentation {
+                        depth: 0,
+                        marker: ListItemMarker::Ordered(4),
+                        continuation: true,
+                    }),
+                    ..TextBlockPresentation::default()
+                },
+                styles: Vec::new(),
+                annotations: Vec::new(),
+            })],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: Vec::new(),
+        });
+        let backend = TestBackend::new(24, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        let row = buffer_rows(terminal.backend().buffer())
+            .into_iter()
+            .find(|row| row.contains("Continuation."))
+            .expect("continuation row");
+        let content = row.chars().skip(1).collect::<String>();
+        assert!(content.starts_with("   Continuation."));
+        assert!(!content.contains("4."));
+    }
+
+    #[test]
     fn scrolls_content_to_keep_current_sentence_visible() {
         let prefix = "One.\nTwo.\nThree.\nFour.\nFive.\nSix.\n";
         let document = Document {
             blocks: vec![Block::Text(TextBlock {
                 text: format!("{prefix}Seven."),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: Vec::new(),
             })],
             toc: Vec::new(),
@@ -1092,6 +1727,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: format!("{prefix}Four.\nFive.\nSix."),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: Vec::new(),
             })],
             toc: Vec::new(),
@@ -1122,6 +1759,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "First line.\nSecond line.".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: Vec::new(),
             })],
             toc: Vec::new(),
@@ -1243,6 +1882,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text with [1].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: "Text with ".len(),
@@ -1278,6 +1919,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text with [1].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: "Text with ".len(),
@@ -1310,6 +1953,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text with [1].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: "Text with ".len(),
@@ -1347,6 +1992,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text with [1].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: "Text with ".len(),
@@ -1382,6 +2029,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: format!("{prefix} Target [1]."),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: prefix.len() + " Target ".len(),
@@ -1427,6 +2076,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text [1] and [2].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![
                     AnnotationRef {
                         id: "note-1".to_string(),
@@ -1463,6 +2114,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text [1] and [2].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![
                     AnnotationRef {
                         id: "missing-note".to_string(),
@@ -1500,6 +2153,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text with [1].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: "Text with ".len(),
@@ -1539,6 +2194,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text with [1].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: "Text with ".len(),
@@ -1769,6 +2426,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "First sentence. Second sentence.".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: Vec::new(),
             })],
             toc: vec![TocNode {
@@ -1793,6 +2452,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "First sentence.".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: Vec::new(),
             })],
             toc: vec![TocNode {
@@ -1828,6 +2489,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "First sentence.".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: Vec::new(),
             })],
             toc: vec![TocNode {

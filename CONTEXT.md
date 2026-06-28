@@ -6,7 +6,13 @@
 The in-memory representation of an opened EPUB book. A flat list of `Block`s derived from the EPUB spine order. Each `Block` knows its source chapter. The TOC is a separate tree structure, not derived from the blocks.
 
 ### Block
-A fundamental rendering unit in the document. Two variants: `TextBlock` (a paragraph of text) and `ImageBlock` (an inline image). Blocks appear in spine order.
+A fundamental rendering unit in the document. Two variants: `TextBlock` (normalized text with optional style ranges and block presentation) and `ImageBlock` (an inline image). Blocks appear in spine order.
+
+### TextStyleRange
+A sorted, non-overlapping UTF-8 byte range into `TextBlock.text`. It stores the effective combination of bold, italic, underline, and strikethrough modifiers derived from semantic XHTML tags. Nested tags are flattened during eager parsing. Style ranges, sentences, and annotations all address the same normalized text.
+
+### TextBlockPresentation
+Composable block-level metadata attached to a `TextBlock`: paragraph or heading role, blockquote depth, and optional list-item marker/depth/continuation. Render-only heading spacing, quote gutters, list markers, and hanging indentation are not inserted into `TextBlock.text`, so navigation and persisted progress offsets remain stable. See `docs/adr/0002-flat-style-ranges.md`.
 
 ### Annotation
 A footnote or endnote extracted from the EPUB at parse time. Stored as plain text in an `AnnotationStore` (HashMap keyed by ID). Referenced from `TextBlock`s via `AnnotationRef`s that record the character offset of the anchor marker within the block's plain text.
@@ -27,6 +33,9 @@ An enum representing which UI component currently owns keyboard input. Four vari
 ### Parse strategy
 Eager full-parse at file open. The entire EPUB is walked spine-order, all chapters converted to Blocks, all annotations extracted into the AnnotationStore, before any rendering begins.
 
+### Basic EPUB formatting
+Semantic `<strong>/<b>`, `<em>/<i>`, `<u>/<ins>`, and `<s>/<strike>/<del>` tags map to terminal modifiers. `h1` renders bold and underlined; `h2`–`h6` render bold, with a blank row before and after headings. Blockquotes use a dark `│ ` gutter on every wrapped line. Unordered and ordered lists preserve nesting, `<ol start>`, and hanging indentation; later paragraphs in one item do not repeat the marker. Full CSS, author colors, fonts, and annotation rich text are not parsed.
+
 ### Sentence
 A rendering-time concern, not a persisted data structure. Segmented on the fly from a `TextBlock` for the purpose of sentence-level highlighting. Segmentation follows the standard Chinese definition of 句子: boundaries only at `。`, `？`, `！`, and `……` (ellipsis). Commas (`，`), semicolons (`；`), enumeration marks (`、`) are clause-internal, not sentence boundaries. Quoted Chinese dialogue keeps inner terminal punctuation together until the closing quote and may include a following attribution phrase. For English text, boundaries at `.`, `!`, `?`. Returns byte-offset ranges, not new strings.
 
@@ -40,7 +49,7 @@ Auto-detect terminal graphics capability via `ratatui-image`'s `Picker` at start
 Save reading position to `$XDG_DATA_HOME/yater/progress.json`. Keyed by file path. Stores block index, sentence offset, and timestamp. Auto-save on navigation (debounced). Restore on open if progress exists for the given EPUB.
 
 ### Reader viewport
-Text reading is framed by a full-screen `Block` with the current chapter in the top border and focus-specific shortcut hints in the bottom border. The top title and footer are left-biased with a small inset instead of centered. The footer changes for content, TOC, compact annotation, and immersed annotation focus. Text reading uses a typewriter-style viewport: the highlighted sentence line is kept on the vertical center row of the framed content area. The active focus target uses `#a97df4` violet text only, without bold, background tint, or terminal reverse video; when TOC has focus, the right reading pane is contextual and does not keep the sentence highlight. The renderer adds virtual top/bottom padding so the first and last text lines can also be centered instead of being clamped to the screen edges.
+Text reading is framed by a full-screen `Block` with the current chapter in the top border and focus-specific shortcut hints in the bottom border. The top title and footer are left-biased with a small inset instead of centered. The footer changes for content, TOC, compact annotation, and immersed annotation focus. Text reading uses a typewriter-style viewport: the highlighted sentence line is kept on the vertical center row of the framed content area. The active focus target uses `#a97df4` violet text only, without adding bold, background tint, or terminal reverse video; EPUB modifiers and annotation-marker modifiers remain composed with that foreground color. When TOC has focus, the right reading pane is contextual and does not keep the sentence highlight, but EPUB formatting remains. The renderer adds virtual top/bottom padding so the first and last text lines can also be centered instead of being clamped to the screen edges.
 
 ### TOC
 A `Vec<TocNode>` tree parsed from the EPUB's navigation document. Each `TocNode` has title, target block index, and children. Rendered as a left sidebar inside the same outer reader frame, with the reading context reflowed in the remaining right pane and separated by a dark divider. TOC rows use indent guides (`│`, `└`, `├`), expand/collapse markers (`▸`/`▾`), and the same violet selection highlight used by the reader focus sentence. `TocState` tracks expanded nodes (HashSet), selected row, and scroll offset.

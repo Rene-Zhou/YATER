@@ -509,6 +509,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -539,6 +541,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -569,6 +573,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -594,6 +600,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -629,6 +637,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -669,6 +679,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -712,6 +724,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -776,6 +790,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -808,6 +824,8 @@ mod tests {
             blocks: vec![Block::Text(TextBlock {
                 text: "Text with [1].".to_string(),
                 chapter_index: 0,
+                presentation: Default::default(),
+                styles: Vec::new(),
                 annotations: vec![AnnotationRef {
                     id: "note-1".to_string(),
                     offset: "Text with ".len(),
@@ -846,6 +864,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -887,6 +907,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second. Third. Fourth.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -989,6 +1011,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -1046,6 +1070,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second. Third.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -1107,6 +1133,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -1165,6 +1193,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -1217,6 +1247,8 @@ mod tests {
                     blocks: vec![Block::Text(TextBlock {
                         text: "First. Second.".to_string(),
                         chapter_index: 0,
+                        presentation: Default::default(),
+                        styles: Vec::new(),
                         annotations: Vec::new(),
                     })],
                     toc: Vec::new(),
@@ -1266,11 +1298,15 @@ mod tests {
                 Block::Text(TextBlock {
                     text: "Chapter one.".to_string(),
                     chapter_index: 0,
+                    presentation: Default::default(),
+                    styles: Vec::new(),
                     annotations: Vec::new(),
                 }),
                 Block::Text(TextBlock {
                     text: "Section one.".to_string(),
                     chapter_index: 0,
+                    presentation: Default::default(),
+                    styles: Vec::new(),
                     annotations: Vec::new(),
                 }),
             ],

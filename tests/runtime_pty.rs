@@ -50,8 +50,8 @@ fn binary_renders_and_restores_a_real_pty_without_graphics_queries_when_images_a
             "\n",
             "\n",
             "Opening heading.\n",
+            "\n",
             "First  paragraph.\n",
-            "Final  paragraph.\n",
             "  READ j/k | ; | Tab | q"
         )
     );
