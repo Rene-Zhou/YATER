@@ -18,6 +18,20 @@ All code must be written Test-First. Strict Red-Green-Refactor:
 
 Never write production code without a failing test driving it. Use the five testing seams defined in the PRD (parser, segmenter, input handler, renderer, progress) as entry points. Pure functions (`sentence.rs`, `input.rs`) get thorough unit tests; modules with I/O (`epub/`, `render/`) get integration tests with the fixture EPUB.
 
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues via `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the canonical triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout. See `docs/agents/domain.md`.
+
 ## Build / Test / Run
 
 ```
