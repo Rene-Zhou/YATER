@@ -147,7 +147,7 @@ Auto-detect terminal graphics capability via `ratatui-image`'s `Picker` at start
 
 ### TOC rendering
 
-Inspired by neo-tree.nvim. Each row assembled from indent guides (`│`, `└`, `├`) + expand/collapse markers (`▸`/`▾`) + title. `TocState` tracks expanded nodes (HashSet), selected row, and scroll offset. Component-composition pattern for row rendering.
+Inspired by neo-tree.nvim. Each row is assembled from indent guides (`│`, `└`, `├`) + expand/collapse markers (`▸`/`▾`) + title. `App` tracks collapsed paths, the selected row, and a persistent scroll offset. The renderer measures wrapped title heights and scrolls only enough to keep the selection visible: downward movement cannot leave the viewport, and upward movement moves the selection to the top before the viewport begins scrolling. Component-composition pattern for row rendering.
 
 ### Annotation overlay
 

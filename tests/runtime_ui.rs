@@ -131,6 +131,82 @@ fn toc_key_focuses_the_current_reading_chapter() {
 }
 
 #[test]
+fn toc_selection_stays_visible_when_long_titles_wrap() {
+    let mut app = App::new(long_titled_toc_document());
+    let backend = TestBackend::new(40, 6);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    run_terminal_loop(
+        &mut terminal,
+        &mut app,
+        [
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        ],
+    )
+    .expect("run terminal");
+
+    assert!(
+        highlighted_text(terminal.backend().buffer()).contains("Chapter Three"),
+        "{}",
+        frame_snapshot(terminal.backend().buffer())
+    );
+}
+
+#[test]
+fn toc_selection_moves_up_before_the_scrolled_viewport_moves() {
+    let mut app = App::new(long_toc_document());
+    let backend = TestBackend::new(40, 6);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut keys = vec![KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)];
+    keys.extend((0..7).map(|_| KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)));
+    keys.push(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+
+    run_terminal_loop(&mut terminal, &mut app, keys).expect("run terminal");
+
+    assert_eq!(
+        highlighted_row(terminal.backend().buffer()),
+        Some(3),
+        "{}",
+        frame_snapshot(terminal.backend().buffer())
+    );
+}
+
+#[test]
+fn toc_viewport_scrolls_up_only_after_selection_reaches_the_top() {
+    let mut app = App::new(long_toc_document());
+    let backend = TestBackend::new(40, 6);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut keys = vec![KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)];
+    keys.extend((0..7).map(|_| KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)));
+    keys.extend((0..3).map(|_| KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)));
+
+    run_terminal_loop(&mut terminal, &mut app, keys).expect("run terminal");
+
+    assert_eq!(highlighted_row(terminal.backend().buffer()), Some(1));
+    assert!(
+        frame_snapshot(terminal.backend().buffer()).contains("│Chapter Five"),
+        "{}",
+        frame_snapshot(terminal.backend().buffer())
+    );
+
+    run_terminal_loop(
+        &mut terminal,
+        &mut app,
+        [KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)],
+    )
+    .expect("run terminal");
+
+    assert_eq!(highlighted_row(terminal.backend().buffer()), Some(1));
+    assert!(
+        frame_snapshot(terminal.backend().buffer()).contains("│Chapter Four"),
+        "{}",
+        frame_snapshot(terminal.backend().buffer())
+    );
+}
+
+#[test]
 fn navigation_scrolls_past_the_rendered_height_of_an_inline_image() {
     let document = Document {
         blocks: vec![
@@ -531,6 +607,58 @@ fn reading_document() -> Document {
     }
 }
 
+fn long_titled_toc_document() -> Document {
+    Document {
+        blocks: vec![text_block("Reading context.")],
+        toc: [
+            "Chapter One with a long title",
+            "Chapter Two with a long title",
+            "Chapter Three with a long title",
+            "Chapter Four with a long title",
+        ]
+        .into_iter()
+        .map(|title| TocNode {
+            title: title.to_string(),
+            target_block_index: 0,
+            children: Vec::new(),
+        })
+        .collect(),
+        annotations: HashMap::new(),
+        chapter_ranges: vec![ChapterRange {
+            start_block: 0,
+            end_block: 0,
+        }],
+    }
+}
+
+fn long_toc_document() -> Document {
+    Document {
+        blocks: vec![text_block("Reading context.")],
+        toc: [
+            "Chapter One",
+            "Chapter Two",
+            "Chapter Three",
+            "Chapter Four",
+            "Chapter Five",
+            "Chapter Six",
+            "Chapter Seven",
+            "Chapter Eight",
+        ]
+        .into_iter()
+        .map(|title| TocNode {
+            title: title.to_string(),
+            target_block_index: 0,
+            children: Vec::new(),
+        })
+        .collect(),
+        annotations: HashMap::new(),
+        chapter_ranges: vec![ChapterRange {
+            start_block: 0,
+            end_block: 0,
+        }],
+    }
+}
+
 fn text_block(text: &str) -> Block {
     Block::Text(TextBlock {
         text: text.to_string(),
@@ -563,6 +691,16 @@ fn highlighted_text(buffer: &ratatui::buffer::Buffer) -> String {
         .filter(|cell| cell.fg == Color::Rgb(169, 125, 244) && cell.bg == Color::Reset)
         .map(|cell| cell.symbol())
         .collect()
+}
+
+fn highlighted_row(buffer: &ratatui::buffer::Buffer) -> Option<usize> {
+    buffer
+        .content()
+        .chunks(buffer.area.width as usize)
+        .position(|row| {
+            row.iter()
+                .any(|cell| cell.fg == Color::Rgb(169, 125, 244) && cell.bg == Color::Reset)
+        })
 }
 
 fn test_png_bytes(width: u32, height: u32) -> Vec<u8> {

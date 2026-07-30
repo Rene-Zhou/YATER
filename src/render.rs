@@ -757,7 +757,14 @@ fn draw_toc(frame: &mut ratatui::Frame<'_>, content: Rect, app: &App) {
         .collect::<Vec<_>>();
 
     frame.render_widget(Clear, content);
-    let scroll = toc_scroll_offset(app.selected_toc_row(), content.height);
+    let scroll = toc_scroll_offset(
+        &rows,
+        app.selected_toc_row(),
+        content.width,
+        content.height,
+        app.toc_scroll_offset(),
+    );
+    app.set_toc_scroll_offset(scroll);
     frame.render_widget(
         Paragraph::new(rows)
             .wrap(Wrap { trim: false })
@@ -819,12 +826,44 @@ fn toc_divider(height: u16) -> Paragraph<'static> {
     )
 }
 
-fn toc_scroll_offset(selected_row: usize, visible_height: u16) -> u16 {
-    let visible_height = visible_height as usize;
-    if visible_height == 0 || selected_row < visible_height {
+fn toc_scroll_offset(
+    rows: &[Line<'_>],
+    selected_row: usize,
+    visible_width: u16,
+    visible_height: u16,
+    previous_scroll: u16,
+) -> u16 {
+    if visible_width == 0 || visible_height == 0 || selected_row >= rows.len() {
         0
     } else {
-        (selected_row + 1 - visible_height) as u16
+        let wrapped_line_count = |row: &Line<'_>| {
+            Paragraph::new(row.clone())
+                .wrap(Wrap { trim: false })
+                .line_count(visible_width)
+        };
+        let row_heights = rows.iter().map(wrapped_line_count).collect::<Vec<_>>();
+        let selected_top = row_heights[..selected_row]
+            .iter()
+            .copied()
+            .fold(0usize, usize::saturating_add);
+        let selected_bottom = selected_top.saturating_add(row_heights[selected_row]);
+        let max_scroll = row_heights
+            .iter()
+            .copied()
+            .fold(0usize, usize::saturating_add)
+            .saturating_sub(usize::from(visible_height));
+        let previous_scroll = usize::from(previous_scroll).min(max_scroll);
+        let viewport_bottom = previous_scroll.saturating_add(usize::from(visible_height));
+
+        let scroll = if selected_top < previous_scroll {
+            selected_top
+        } else if selected_bottom > viewport_bottom {
+            selected_bottom.saturating_sub(usize::from(visible_height))
+        } else {
+            previous_scroll
+        };
+
+        scroll.min(max_scroll).min(usize::from(u16::MAX)) as u16
     }
 }
 

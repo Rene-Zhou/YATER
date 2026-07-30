@@ -9,7 +9,7 @@ YATER (Yet Another Terminal Epub Reader) is a terminal-native EPUB reader writte
 - Typewriter-style reading: the active sentence stays near the vertical center.
 - Violet text-only focus highlight (`#a97df4`) without reverse video or bold.
 - Semantic EPUB formatting for bold, italic, underline, strikethrough, headings, blockquotes, and nested lists.
-- TOC sidebar opened with `Tab`, rendered inside the same reader frame.
+- TOC sidebar opened with `Tab`, rendered inside the same reader frame, with viewport-aware scrolling for long TOCs and wrapped titles.
 - Footnote/endnote extraction from EPUB semantics, DPUB-ARIA, and EPUB2-style reciprocal links.
 - Inline image support through Sixel, Kitty, iTerm2, halfblock fallback, or explicit off mode.
 - Debounced progress persistence under `$XDG_DATA_HOME/yater/progress.json`.

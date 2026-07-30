@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use crate::document::Block;
@@ -30,6 +30,7 @@ pub struct App {
     position: ReadingPosition,
     focus: Focus,
     selected_toc_row: usize,
+    toc_scroll_offset: Cell<u16>,
     collapsed_toc_paths: HashSet<Vec<usize>>,
     visible_toc_rows: Vec<VisibleTocRow>,
     image_mode: SelectedImageMode,
@@ -94,6 +95,7 @@ impl App {
             position,
             focus: Focus::Content,
             selected_toc_row: 0,
+            toc_scroll_offset: Cell::new(0),
             collapsed_toc_paths,
             visible_toc_rows,
             image_mode,
@@ -247,6 +249,14 @@ impl App {
 
     pub fn selected_toc_row(&self) -> usize {
         self.selected_toc_row
+    }
+
+    pub(crate) fn toc_scroll_offset(&self) -> u16 {
+        self.toc_scroll_offset.get()
+    }
+
+    pub(crate) fn set_toc_scroll_offset(&self, offset: u16) {
+        self.toc_scroll_offset.set(offset);
     }
 
     pub(crate) fn visible_toc_rows(&self) -> &[VisibleTocRow] {

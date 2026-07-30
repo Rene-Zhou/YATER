@@ -15,7 +15,7 @@ categories = ["command-line-utilities"]
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-ratatui = { version = "0.30.0", default-features = false, features = ["crossterm"] }
+ratatui = { version = "0.30.0", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 ratatui-image = { version = "11.0.3", default-features = false, features = ["crossterm"] }
 roxmltree = "0.21.1"
 serde = { version = "1", features = ["derive"] }
