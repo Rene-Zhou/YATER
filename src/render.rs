@@ -4,10 +4,11 @@ use crate::app::{
 use crate::document::{Block, ListItemMarker, TextBlockRole};
 use crate::image::SelectedImageMode;
 use crate::input::Focus;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph, Widget, Wrap};
 use ratatui_image::{Image as TerminalImage, Resize};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -187,7 +188,6 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 }
 
 fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
-    let document = app.document();
     let position = app.position();
     let chapter_range = app
         .chapter_range_for_block(position.block_index)
@@ -198,60 +198,14 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
 
     lines.extend((0..top_padding).map(|_| Line::default()));
 
+    let highlight_current = app.focus() != Focus::Toc;
     for block_index in chapter_range {
-        match document.blocks.get(block_index) {
-            Some(Block::Text(block)) => {
-                if matches!(block.presentation.role, TextBlockRole::Heading(_)) {
-                    lines.push(Line::default());
-                }
-                let mut block_lines = vec![Vec::new()];
-                let block_style = block_presentation_style(block);
-                let highlighted_sentence_offset = (app.focus() != Focus::Toc
-                    && block_index == position.block_index)
-                    .then_some(position.sentence_offset);
-                let mut cursor = 0;
-                for range in app.sentence_ranges_for_block(block_index).iter().copied() {
-                    if cursor < range.0 {
-                        push_block_text_span_lines(
-                            &mut block_lines,
-                            block,
-                            (cursor, range.0),
-                            block_style,
-                        );
-                    }
-
-                    let style = if highlighted_sentence_offset == Some(range.0) {
-                        block_style.patch(focus_highlight_style())
-                    } else {
-                        block_style
-                    };
-                    push_sentence_span_lines(&mut block_lines, block, range, style, document);
-                    cursor = range.1;
-                }
-
-                if cursor < block.text.len() {
-                    push_block_text_span_lines(
-                        &mut block_lines,
-                        block,
-                        (cursor, block.text.len()),
-                        block_style,
-                    );
-                }
-
-                lines.extend(decorated_text_block_lines(
-                    block,
-                    block_lines,
-                    content.width,
-                ));
-                if matches!(block.presentation.role, TextBlockRole::Heading(_)) {
-                    lines.push(Line::default());
-                }
-            }
-            Some(Block::Image(image)) => {
-                lines.extend(image_content_lines(app, block_index, image, content));
-            }
-            None => {}
-        }
+        lines.extend(block_display_lines(
+            app,
+            block_index,
+            content,
+            highlight_current,
+        ));
     }
 
     if lines.is_empty() {
@@ -261,6 +215,105 @@ fn current_content_lines(app: &App, content: Rect) -> Vec<Line<'static>> {
     lines.extend((0..bottom_padding).map(|_| Line::default()));
 
     lines
+}
+
+/// Builds the display lines for a single block exactly as the content view
+/// renders them (including heading padding and decorated prefixes). When
+/// `highlight_current` is set, the focused sentence of the current block is
+/// styled with the focus highlight.
+fn block_display_lines(
+    app: &App,
+    block_index: usize,
+    content: Rect,
+    highlight_current: bool,
+) -> Vec<Line<'static>> {
+    let document = app.document();
+    let position = app.position();
+    let mut lines = Vec::new();
+    match document.blocks.get(block_index) {
+        Some(Block::Text(block)) => {
+            if matches!(block.presentation.role, TextBlockRole::Heading(_)) {
+                lines.push(Line::default());
+            }
+            let mut block_lines = vec![Vec::new()];
+            let block_style = block_presentation_style(block);
+            let highlighted_sentence_offset = (highlight_current
+                && block_index == position.block_index)
+                .then_some(position.sentence_offset);
+            let mut cursor = 0;
+            for range in app.sentence_ranges_for_block(block_index).iter().copied() {
+                if cursor < range.0 {
+                    push_block_text_span_lines(
+                        &mut block_lines,
+                        block,
+                        (cursor, range.0),
+                        block_style,
+                    );
+                }
+
+                let style = if highlighted_sentence_offset == Some(range.0) {
+                    block_style.patch(focus_highlight_style())
+                } else {
+                    block_style
+                };
+                push_sentence_span_lines(&mut block_lines, block, range, style, document);
+                cursor = range.1;
+            }
+
+            if cursor < block.text.len() {
+                push_block_text_span_lines(
+                    &mut block_lines,
+                    block,
+                    (cursor, block.text.len()),
+                    block_style,
+                );
+            }
+
+            lines.extend(decorated_text_block_lines(
+                block,
+                block_lines,
+                content.width,
+            ));
+            if matches!(block.presentation.role, TextBlockRole::Heading(_)) {
+                lines.push(Line::default());
+            }
+        }
+        Some(Block::Image(image)) => {
+            lines.extend(image_content_lines(app, block_index, image, content));
+        }
+        None => {}
+    }
+    lines
+}
+
+/// Wrapped row count of a block's display lines, measured with the same
+/// word wrapper the renderer uses.
+fn block_screen_rows(app: &App, block_index: usize, content: Rect) -> u16 {
+    let lines = block_display_lines(app, block_index, content, false);
+    Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .line_count(content.width.max(1))
+        .min(u16::MAX as usize) as u16
+}
+
+/// Row on which the focused sentence starts inside its block, measured by
+/// rendering the block's display lines the same way the content view does.
+fn sentence_row_in_block(app: &App, block_index: usize, content: Rect) -> Option<u16> {
+    app.document().text_block(block_index)?;
+    let lines = block_display_lines(app, block_index, content, true);
+    let width = content.width.max(1);
+    let height = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .max(1)
+        .min(u16::MAX as usize) as u16;
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .render(area, &mut buffer);
+    let highlight = focus_highlight_style().fg;
+    (0..area.height).find(|y| (0..area.width).any(|x| Some(buffer[(x, *y)].fg) == highlight))
 }
 
 fn block_presentation_style(block: &crate::document::TextBlock) -> Style {
@@ -572,46 +625,6 @@ fn image_content_lines(
             None => vec![Line::from(format!("[image: {label}]"))],
         },
     }
-}
-
-fn text_block_screen_rows(block: &crate::document::TextBlock, width: u16) -> u16 {
-    let width = usize::from(text_block_content_width(block, width));
-    let mut rows = 1usize;
-    let mut column = 0usize;
-
-    for character in block.text.chars() {
-        if character == '\n' {
-            rows += 1;
-            column = 0;
-            continue;
-        }
-
-        let character_width = character.width().unwrap_or(0);
-        if character_width == 0 {
-            continue;
-        }
-
-        if column + character_width > width {
-            rows += 1;
-            column = 0;
-        }
-
-        column += character_width;
-        if column == width {
-            column = 0;
-            rows += 1;
-        }
-    }
-
-    if column == 0 && rows > 1 && !block.text.ends_with('\n') {
-        rows -= 1;
-    }
-
-    if matches!(block.presentation.role, TextBlockRole::Heading(_)) {
-        rows += 2;
-    }
-
-    rows.min(u16::MAX as usize) as u16
 }
 
 fn push_text_span_lines(lines: &mut Vec<Vec<Span<'static>>>, text: String, style: Style) {
@@ -966,16 +979,11 @@ fn draw_annotation_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App
 
 fn current_sentence_screen_row(app: &App, content: Rect) -> Option<u16> {
     let position = app.position();
-    let block = app.document().text_block(position.block_index)?;
-    let sentence_range = app
-        .sentence_ranges_for_block(position.block_index)
+    app.document().text_block(position.block_index)?;
+    app.sentence_ranges_for_block(position.block_index)
         .iter()
-        .copied()
-        .find(|range| range.0 == position.sentence_offset)?;
-    let sentence = block.text.get(sentence_range.0..sentence_range.1)?;
-    let visible_sentence = sentence.trim_start_matches(char::is_whitespace);
-    let visible_start = sentence_range.1 - visible_sentence.len();
-    let prefix = block.text.get(..visible_start)?;
+        .any(|range| range.0 == position.sentence_offset)
+        .then_some(())?;
     let (chapter_start, metrics) = content_row_metrics(app, content);
     let preceding_rows = position
         .block_index
@@ -991,19 +999,12 @@ fn current_sentence_screen_row(app: &App, content: Rect) -> Option<u16> {
         .unwrap_or(0);
 
     let (top_padding, _) = typewriter_padding(content.height);
+    let row_in_block = sentence_row_in_block(app, position.block_index, content)?;
     Some(
         top_padding
             .saturating_add(preceding_rows)
-            .saturating_add(text_block_leading_rows(block))
-            .saturating_add(wrapped_row_for_prefix(
-                prefix,
-                text_block_content_width(block, content.width),
-            )),
+            .saturating_add(row_in_block),
     )
-}
-
-fn text_block_leading_rows(block: &crate::document::TextBlock) -> u16 {
-    u16::from(matches!(block.presentation.role, TextBlockRole::Heading(_)))
 }
 
 fn content_scroll_offset(app: &App, content: Rect) -> u16 {
@@ -1048,7 +1049,7 @@ fn content_row_metrics(app: &App, content: Rect) -> (usize, ContentRowMetrics) {
         let block_rows = (range.start_block..=range.end_block)
             .filter_map(|block_index| {
                 document.blocks.get(block_index).map(|block| match block {
-                    Block::Text(block) => text_block_screen_rows(block, content.width),
+                    Block::Text(_) => block_screen_rows(app, block_index, content),
                     Block::Image(image) => {
                         image_content_lines(app, block_index, image, content).len() as u16
                     }
@@ -1075,38 +1076,6 @@ fn typewriter_padding(height: u16) -> (u16, u16) {
     let bottom = height.saturating_sub(top.saturating_add(1));
 
     (top, bottom)
-}
-
-fn wrapped_row_for_prefix(prefix: &str, width: u16) -> u16 {
-    let width = usize::from(width.max(1));
-    let mut row = 0;
-    let mut column = 0;
-
-    for character in prefix.chars() {
-        if character == '\n' {
-            row += 1;
-            column = 0;
-            continue;
-        }
-
-        let character_width = character.width().unwrap_or(0);
-        if character_width == 0 {
-            continue;
-        }
-
-        if column + character_width > width {
-            row += 1;
-            column = 0;
-        }
-
-        column += character_width;
-        if column >= width {
-            row += 1;
-            column = 0;
-        }
-    }
-
-    row
 }
 
 struct VisibleAnnotation {
@@ -1174,7 +1143,7 @@ mod tests {
     };
     use crate::input::Action;
 
-    use super::{draw, focus_highlight_style, wrapped_row_for_prefix};
+    use super::{draw, focus_highlight_style};
 
     #[test]
     fn renders_top_bar_and_current_sentence() {
@@ -1792,6 +1761,120 @@ mod tests {
         );
     }
 
+    // Word wrapping English prose on word boundaries (as ratatui does) uses more
+    // rows than a plain character-fill model. The scroll model must agree with the
+    // renderer or the highlight drifts below the center row as the reader moves
+    // deeper into a chapter.
+    const WORD_WRAP_PROSE: &str = "But while the mood outside was festive, within the walls of the keep\u{2019}s courtyard there was an event underway, the tone of which was somewhat more subdued.";
+
+    fn prose_block(text: &str) -> Block {
+        Block::Text(TextBlock {
+            text: text.to_string(),
+            chapter_index: 0,
+            presentation: Default::default(),
+            styles: Vec::new(),
+            annotations: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn keeps_highlight_centered_in_cjk_text_without_spaces() {
+        // CJK text has no whitespace, so the "word" before the focused sentence
+        // can span multiple rows. The sentence row must come from the real wrap.
+        let sentence = "他知道，多年来的每一个选择都在把他推向这座高塔。";
+        let document = Document {
+            blocks: vec![prose_block(&sentence.repeat(6))],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: vec![crate::document::ChapterRange {
+                start_block: 0,
+                end_block: 0,
+            }],
+        };
+        let mut app = App::new(document);
+        let backend = TestBackend::new(22, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        let mut previous = app.position();
+        loop {
+            app.apply(Action::NextSentence);
+            if app.position() == previous {
+                break;
+            }
+            previous = app.position();
+        }
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert_eq!(
+            row_index_with_highlight(terminal.backend().buffer()),
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn keeps_highlight_centered_after_word_wrapped_blocks() {
+        // 22x12 terminal -> 20x10 content area -> center highlight row is 6.
+        let mut blocks: Vec<Block> = (0..4).map(|_| prose_block(WORD_WRAP_PROSE)).collect();
+        blocks.push(prose_block("The target sentence."));
+        let last_block = blocks.len() - 1;
+        let document = Document {
+            blocks,
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: vec![crate::document::ChapterRange {
+                start_block: 0,
+                end_block: last_block,
+            }],
+        };
+        let mut app = App::new(document);
+        let backend = TestBackend::new(22, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        while app.position().block_index < last_block {
+            app.apply(Action::NextSentence);
+        }
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert_eq!(
+            row_index_with_highlight(terminal.backend().buffer()),
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn keeps_highlight_centered_after_word_wrapped_prefix_in_block() {
+        // Same drift, but accumulated inside the focused block before the sentence.
+        let document = Document {
+            blocks: vec![prose_block(&format!(
+                "{WORD_WRAP_PROSE} {WORD_WRAP_PROSE} The target sentence."
+            ))],
+            toc: Vec::new(),
+            annotations: HashMap::new(),
+            chapter_ranges: vec![crate::document::ChapterRange {
+                start_block: 0,
+                end_block: 0,
+            }],
+        };
+        let mut app = App::new(document);
+        let backend = TestBackend::new(22, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        let mut previous = app.position();
+        loop {
+            app.apply(Action::NextSentence);
+            if app.position() == previous {
+                break;
+            }
+            previous = app.position();
+        }
+        terminal.draw(|frame| draw(frame, &app)).expect("draw");
+
+        assert_eq!(
+            row_index_with_highlight(terminal.backend().buffer()),
+            Some(6)
+        );
+    }
+
     #[test]
     fn renders_text_block_line_breaks_on_separate_rows() {
         let app = App::new(Document {
@@ -2098,12 +2181,6 @@ mod tests {
             row_index_containing_text(buffer, "└").expect("overlay bottom border row");
 
         assert!(overlay_bottom_row < highlighted_row);
-    }
-
-    #[test]
-    fn wrapped_row_for_prefix_counts_cjk_display_width() {
-        assert_eq!(wrapped_row_for_prefix("你好你好", 4), 2);
-        assert_eq!(wrapped_row_for_prefix("a你好", 2), 3);
     }
 
     #[test]
