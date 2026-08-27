@@ -1,62 +1,49 @@
 # YATER
 
-YATER (Yet Another Terminal Epub Reader) is a terminal-native EPUB reader written in Rust. It focuses on CJK-friendly sentence navigation, a minimal framed reading UI, inline terminal images, a Vim-style table of contents, and footnote/endnote overlays.
+**YATER** (Yet Another Terminal Epub Reader) is a terminal-native EPUB reader. No GUI, no distractions — just your book, in the terminal you already live in.
 
-## Features
+It was built for comfortable long-form reading, with first-class support for both English and CJK text.
 
-- EPUB-only reader with no GUI window.
-- CJK-aware sentence segmentation, including quoted dialogue cases.
-- Typewriter-style reading: the active sentence stays near the vertical center.
-- Violet text-only focus highlight (`#a97df4`) without reverse video or bold.
-- Semantic EPUB formatting for bold, italic, underline, strikethrough, headings, blockquotes, and nested lists.
-- TOC sidebar opened with `Tab`, rendered inside the same reader frame, with viewport-aware scrolling for long TOCs and wrapped titles.
-- Footnote/endnote extraction from EPUB semantics, DPUB-ARIA, and EPUB2-style reciprocal links.
-- Inline image support through Sixel, Kitty, iTerm2, halfblock fallback, or explicit off mode.
-- Debounced progress persistence under `$XDG_DATA_HOME/yater/progress.json`.
-- Non-fatal parsing/image issues logged under `$XDG_STATE_HOME/yater/yater.log`.
+## Highlights
+
+- **Typewriter-style reading** — the sentence you're reading stays centered on the screen; the text scrolls around you.
+- **Sentence-level navigation** — move through a book one sentence at a time, with CJK-aware segmentation that understands Chinese and Japanese punctuation and quoted dialogue.
+- **Gentle focus highlight** — the current sentence is tinted, never inverted or bolded.
+- **Faithful formatting** — bold, italic, underline, strikethrough, headings, blockquotes, and nested lists carry over from the EPUB.
+- **Footnotes without leaving the page** — endnotes and footnotes open in a floating overlay, expandable to a scrollable view.
+- **Table of contents sidebar** — a Vim-navigable tree that opens beside your text.
+- **Inline images** — rendered right in the terminal via Sixel, Kitty, or iTerm2 graphics, with an automatic halfblock fallback.
+- **Remembers where you stopped** — reading progress is saved per book and restored on the next open.
 
 ## Install
 
-Build from source:
+Build from source (requires a recent Rust toolchain):
 
 ```bash
+git clone https://github.com/Rene-Zhou/YATER.git
+cd YATER
 cargo build --release
 ```
 
-The binary will be at:
+The binary is at `target/release/yater`. Copy it somewhere on your `PATH`, e.g.:
 
 ```bash
-target/release/yater
-```
-
-For development on Fedora with the distro Rust packages, install the formatter with:
-
-```bash
-sudo dnf install rustfmt
-```
-
-If system package installation is unavailable, install user-level Rust tooling:
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-~/.cargo/bin/rustup component add rustfmt
+ln -s "$PWD/target/release/yater" ~/.local/bin/yater
 ```
 
 ## Usage
 
 ```bash
-yater <file.epub> [--image-mode=sixel|halfblock|off]
+yater <file.epub>
 ```
 
-Examples:
+Images are auto-detected by default. To override:
 
 ```bash
-cargo run -- ~/books/book.epub
-cargo run -- ~/books/book.epub --image-mode=halfblock
-cargo run -- ~/books/book.epub --image-mode=off
+yater book.epub --image-mode=sixel      # force Sixel
+yater book.epub --image-mode=halfblock  # force Unicode halfblock
+yater book.epub --image-mode=off        # disable images
 ```
-
-When `--image-mode` is omitted, YATER auto-detects terminal graphics capability and may select Sixel, Kitty, iTerm2, halfblock, or off depending on support. Manual override currently accepts `sixel`, `halfblock`, or `off`.
 
 ## Keys
 
@@ -64,67 +51,36 @@ When `--image-mode` is omitted, YATER auto-detects terminal graphics capability 
 
 | Key | Action |
 | --- | --- |
-| `j` / `Down` | Next sentence |
-| `k` / `Up` | Previous sentence |
-| `u` | Fast previous sentence |
-| `n` | Fast next sentence |
-| `h` | Previous paragraph/block |
-| `l` | Next paragraph/block |
-| `i` | Start of current chapter |
-| `m` | End of current chapter |
-| `;` | Open/cycle annotations for the current sentence |
-| `Tab` | Open TOC |
+| `j` / `k` | Next / previous sentence |
+| `u` / `n` | Fast sentence jump |
+| `h` / `l` | Previous / next paragraph |
+| `i` / `m` | Start / end of chapter |
+| `;` | Open footnotes for the current sentence |
+| `Tab` | Table of contents |
 | `q` | Quit |
 
-### TOC
+### Table of contents
 
 | Key | Action |
 | --- | --- |
-| `j` / `Down` | Next visible TOC row |
-| `k` / `Up` | Previous visible TOC row |
-| `l` / `Enter` | Expand collapsed row or jump to selected target |
-| `h` | Collapse row or move to parent |
-| `Tab` / `Esc` | Close TOC |
+| `j` / `k` | Move selection |
+| `l` / `Enter` | Expand or jump to chapter |
+| `h` | Collapse or move to parent |
+| `Tab` / `Esc` | Close |
 
-### Annotation
+### Footnotes
 
-| Mode | Key | Action |
-| --- | --- | --- |
-| Compact overlay | `;` | Cycle annotations |
-| Compact overlay | `Enter` | Enter immersed annotation view |
-| Compact overlay | any other key | Close overlay |
-| Immersed view | `j` / `Down` | Scroll annotation down |
-| Immersed view | `k` / `Up` | Scroll annotation up |
-| Immersed view | `Esc` | Return to compact overlay |
-
-## Development
-
-Run the main checks:
-
-```bash
-cargo fmt --check
-cargo test --locked
-cargo check --locked
-cargo build --locked
-git diff --check
-```
-
-The project uses a test-first workflow. Useful seams include:
-
-- `src/sentence.rs` for sentence segmentation.
-- `src/input.rs` for key mapping.
-- `src/app.rs` for focus and navigation state.
-- `src/render.rs` and `tests/runtime_ui.rs` for terminal UI snapshots.
-- `src/epub.rs` and `tests/annotation_runtime.rs` for EPUB parsing and annotation behavior.
-
-## Documentation
-
-- [CONTEXT.md](CONTEXT.md) documents the current domain model and runtime behavior.
-- [docs/PRD_v1.md](docs/PRD_v1.md) describes the v1 product scope.
-- [docs/basic-epub-formatting-plan.md](docs/basic-epub-formatting-plan.md) records the requirements and implementation plan for basic EPUB formatting in the TUI.
-- [docs/adr/0001-flat-block-list.md](docs/adr/0001-flat-block-list.md) records the flat block list data model decision.
-- [docs/adr/0002-flat-style-ranges.md](docs/adr/0002-flat-style-ranges.md) records the rich-text range and block-presentation model.
+| Key | Action |
+| --- | --- |
+| `;` | Cycle through the sentence's notes |
+| `Enter` | Expand to full scrollable view |
+| `j` / `k` | Scroll (in full view) |
+| `Esc` | Step back / close |
 
 ## Scope
 
-YATER intentionally does not support PDF/MOBI, TTS, search, bookmarks, themes, mouse interaction, or multiple open books in v1.
+YATER is intentionally focused: it reads EPUB files, in the terminal, one book at a time. It does not aim to support PDF/MOBI, search, bookmarks, themes, or mouse interaction.
+
+## License
+
+MIT
