@@ -166,10 +166,12 @@ Save to `$XDG_DATA_HOME/yater/progress.json`. Keyed by file path. Stores block i
 ### CLI
 
 ```
-yater <file.epub> [--image-mode=sixel|halfblock|off]
+yater <file.epub|file.txt> [--image-mode=sixel|halfblock|off]
 ```
 
-One required positional arg (EPUB path), one optional flag. `--help` and `--version` supported. No subcommands, no config file in v1.
+One required positional arg (EPUB or TXT path), one optional flag. `--help` and `--version` supported. No subcommands, no config file in v1.
+
+TXT files are decoded by BOM (UTF-8, UTF-16LE/BE) or content sniffing (valid UTF-8, else GB18030/GBK). Each non-empty line becomes one paragraph block; the file renders as a single chapter with no TOC.
 
 ### Tech stack
 

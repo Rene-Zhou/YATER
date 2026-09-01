@@ -24,7 +24,11 @@ pub struct Cli {
 }
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "yater", version, about = "Yet Another Terminal Epub Reader")]
+#[command(
+    name = "yater",
+    version,
+    about = "Yet Another Terminal Epub Reader (EPUB and TXT)"
+)]
 struct CliArgs {
     file: PathBuf,
 

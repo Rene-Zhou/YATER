@@ -14,6 +14,7 @@ categories = ["command-line-utilities"]
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
+encoding_rs = "0.8.35"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 ratatui = { version = "0.30.0", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 ratatui-image = { version = "11.0.3", default-features = false, features = ["crossterm"] }
