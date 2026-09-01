@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-YATER (Yet Another Terminal Epub Reader) is a terminal-native EPUB reader written in Rust using `ratatui` + `crossterm`. It provides Vim-style navigation, typewriter-style sentence highlighting, semantic EPUB formatting, inline image rendering (Sixel, Kitty, iTerm2, or halfblock), a TOC sidebar, and floating footnote annotations.
+YATER (Yet Another Terminal Epub Reader) is a terminal-native EPUB/TXT reader written in Rust using `ratatui` + `crossterm`. It provides Vim-style navigation, typewriter-style sentence highlighting, semantic EPUB formatting, inline image rendering (Sixel, Kitty, iTerm2, or halfblock), a TOC sidebar, and floating footnote annotations.
 
 The project has a working Rust implementation. Keep this file, `CONTEXT.md`, and `docs/PRD_v1.md` aligned when behavior changes.
 
@@ -52,6 +52,7 @@ Single Rust crate, synchronous main loop (no event bus). Modules:
 | `main.rs` | Entry point, CLI (`clap`), terminal init/restore (`crossterm`) |
 | `app.rs` | Main loop, Focus state machine, event dispatch |
 | `epub/` | EPUB parsing: spine, TOC, images, annotations |
+| `txt.rs` | Plain-text loading: encoding detection (UTF-8/UTF-16/GB18030), line-based blocks |
 | `document/` | Data structures: Document, Block, AnnotationStore, ChapterRange |
 | `render/` | ratatui drawing: content, TOC sidebar, annotation overlay, top bar |
 | `input.rs` | Key mapping per Focus variant → Actions |

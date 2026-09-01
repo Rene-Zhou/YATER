@@ -34,8 +34,10 @@ ln -s "$PWD/target/release/yater" ~/.local/bin/yater
 ## Usage
 
 ```bash
-yater <file.epub>
+yater <file.epub|file.txt>
 ```
+
+Plain text files are supported alongside EPUB: encoding is detected automatically (UTF-8, UTF-16 with BOM, or GBK/GB18030), each non-empty line becomes a paragraph, and the whole file is presented as a single chapter without a table of contents.
 
 Images are auto-detected by default. To override:
 
@@ -79,7 +81,7 @@ yater book.epub --image-mode=off        # disable images
 
 ## Scope
 
-YATER is intentionally focused: it reads EPUB files, in the terminal, one book at a time. It does not aim to support PDF/MOBI, search, bookmarks, themes, or mouse interaction.
+YATER is intentionally focused: it reads EPUB and TXT files, in the terminal, one book at a time. It does not aim to support PDF/MOBI, search, bookmarks, themes, or mouse interaction.
 
 ## License
 

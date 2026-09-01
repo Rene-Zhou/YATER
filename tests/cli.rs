@@ -69,7 +69,40 @@ fn corrupted_epub_exits_with_clear_startup_error() {
     assert!(
         String::from_utf8(output.stderr)
             .expect("stderr")
-            .contains("failed to open EPUB")
+            .contains("failed to open document")
+    );
+}
+
+#[test]
+fn valid_txt_startup_succeeds() {
+    let tempdir = tempdir().expect("temp dir");
+    let txt_path = tempdir.path().join("book.txt");
+    std::fs::write(&txt_path, "第一段。\n第二段。\n").expect("write txt");
+    let yater = std::env::var("CARGO_BIN_EXE_yater").expect("binary path");
+    let output = Command::new(yater)
+        .arg(txt_path)
+        .output()
+        .expect("run yater with txt file");
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn empty_txt_exits_with_clear_startup_error() {
+    let tempdir = tempdir().expect("temp dir");
+    let txt_path = tempdir.path().join("empty.txt");
+    std::fs::write(&txt_path, "  \n\n").expect("write empty txt");
+    let yater = std::env::var("CARGO_BIN_EXE_yater").expect("binary path");
+    let output = Command::new(yater)
+        .arg(txt_path)
+        .output()
+        .expect("run yater with empty txt");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .expect("stderr")
+            .contains("failed to open document")
     );
 }
 

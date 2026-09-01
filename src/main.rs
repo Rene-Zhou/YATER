@@ -37,10 +37,19 @@ fn main() {
 
     let image_mode = select_image_mode(cli.image_mode, ImageModeSupport::terminal_default());
     let issue_log = IssueLog::from_env();
+    let is_txt = cli
+        .file
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"));
     let mut app = match build_app_with_image_mode(
         &cli.file,
         image_mode,
         |path| {
+            if is_txt {
+                return yater::txt::open(path)
+                    .map_err(|error| RuntimeError::new(error.to_string()));
+            }
+
             epub::open_with_issue_logger_and_image_loading(
                 path,
                 image_mode != yater::image::SelectedImageMode::Off,
@@ -64,7 +73,7 @@ fn main() {
     ) {
         Ok(app) => app,
         Err(error) => {
-            eprintln!("failed to open EPUB: {error}");
+            eprintln!("failed to open document: {error}");
             std::process::exit(1);
         }
     };

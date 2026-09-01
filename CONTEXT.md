@@ -58,7 +58,10 @@ A `Vec<TocNode>` tree parsed from the EPUB's navigation document. Each `TocNode`
 A floating window drawn on top of the content area. Bottom edge aligns above the current highlighted sentence. Bordered `Paragraph` widget via ratatui's `Clear` + draw. The compact overlay wraps text and grows with short-to-medium notes up to a capped height while preserving reading context. Multiple annotations cycle with `;`, counter shown as `[2/3]`. If text still overflows, `Enter` enters `AnnotationImmersed` for scroll; immersed annotation uses the outer reader frame as its border to preserve vertical space. Drawn after content to render on top.
 
 ### CLI
-`yater <file.epub> [--image-mode=sixel|halfblock|off]`. One required positional arg, one optional flag. No subcommands, no config file in v1.
+`yater <file.epub|file.txt> [--image-mode=sixel|halfblock|off]`. One required positional arg, one optional flag. No subcommands, no config file in v1.
+
+### TXT parsing
+Plain-text files (`.txt` extension) load through the same `Document` model: encoding is detected by BOM (UTF-8, UTF-16LE/BE) or content (valid UTF-8, otherwise GB18030, which also covers GBK). Each non-empty, trimmed line becomes a `TextBlock`; the whole file is a single chapter (one `ChapterRange`, empty TOC, no annotations or images). No chapter-heading detection.
 
 ### Error handling
 Startup errors (file not found, corrupted EPUB): print to stderr, exit code 1. Runtime panics: catch at top of main loop, restore terminal, print error, exit. Non-fatal issues (bad image, malformed HTML): log to `$XDG_STATE_HOME/yater/yater.log`, show placeholder, continue.
